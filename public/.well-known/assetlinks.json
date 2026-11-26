@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.netlify.dinu_saran_neet2027.twa",
+        "sha256_cert_fingerprints": ["10:1F:98:2E:57:15:2F:5B:D3:D7:2E:11:99:DB:7D:EB:4A:BD:25:F3:F6:DA:E2:A5:6E:15:E8:34:1F:BB:36:DA"]
+      }
+    }]
