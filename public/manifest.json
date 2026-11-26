@@ -1,0 +1,19 @@
+{
+  "name": "DINU SARAN — NEET 2027 Study & Test Hub",
+  "short_name": "DINU SARAN",
+  "description": "NEET 2027 PCBZ Chapterwise Study & Test Hub",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "https://i.ibb.co/zTX9KKD5/botdp.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}
