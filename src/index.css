@@ -1,0 +1,163 @@
+@import "tailwindcss";
+@theme {
+  --breakpoint-xs: 30rem;
+}
+@custom-variant dark (&:where(.dark, .dark *));
+@import "katex/dist/katex.min.css";
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --font-sans: "Plus Jakarta Sans", "Noto Sans Devanagari", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-hindi: "Noto Sans Devanagari", "Plus Jakarta Sans", sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+    /* Dedicated Light Mode (Soft Cool Paper — Not Glaring White) */
+    --canvas-bg: #F4F6FA;
+    --surface-1: #FFFFFF;
+    --surface-2: #EEF2F7;
+    --surface-3: #E6ECF4;
+    --surface-border: #E2E8F0;
+    --surface-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --text-primary: #0F172A;
+    --text-secondary: #475569;
+    --text-tertiary: #64748B;
+  }
+
+  .dark {
+    color-scheme: dark;
+
+    /* 3-Layer Study-Grade Dark Elevation (Apple & Linear Principle — Zero #000/#FFF halation) */
+    --canvas-bg: #0B0E14;
+    --surface-1: #141923;
+    --surface-2: #1C2331;
+    --surface-recessed: #0E121B;
+    --surface-3: #242D3F;
+    --surface-border: rgba(255, 255, 255, 0.06);
+    --surface-shadow: none;
+    --text-primary: #F1F5F9;
+    --text-secondary: #94A3B8;
+    --text-tertiary: #64748B;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    background-color: var(--canvas-bg);
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--canvas-bg);
+    color: var(--text-primary);
+    overflow-x: hidden;
+  }
+
+  .dark body {
+    color: #F1F5F9;
+    letter-spacing: 0.005em;
+  }
+}
+
+.font-hindi {
+  font-family: var(--font-hindi);
+  line-height: 1.65;
+}
+
+.font-mono-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Primary Level-1 Surface Card */
+.surface-card,
+.glass-panel {
+  background-color: var(--surface-1);
+  border: 1px solid var(--surface-border);
+  box-shadow: var(--surface-shadow);
+}
+
+/* Recessed Segmented Track Surface */
+.recessed-track {
+  background-color: #EEF2F7;
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+
+.dark .recessed-track {
+  background-color: #0E121B;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Subtle top ambient glow — calm, never distracting */
+.obsidian-backdrop {
+  background-image: radial-gradient(
+    ellipse 52% 28% at 50% -10%,
+    rgba(99, 102, 241, 0.09),
+    transparent 70%
+  );
+}
+
+html:not(.dark) .obsidian-backdrop {
+  background-image: radial-gradient(
+    ellipse 52% 28% at 50% -10%,
+    rgba(99, 102, 241, 0.05),
+    transparent 70%
+  );
+}
+
+/* Crisp KaTeX scaling inside Hindi text */
+.katex {
+  font-size: 1.02em;
+}
+
+.katex-display {
+  margin: 0.5rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.15rem;
+}
+
+/* Subtle slim scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.16);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(99, 102, 241, 0.45);
+}
+
+@keyframes shake-gentle {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+}
+
+.animate-shake-gentle {
+  animation: shake-gentle 0.28s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .animate-shake-gentle {
+    animation: none;
+  }
+}
