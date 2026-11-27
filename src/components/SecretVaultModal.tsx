@@ -3,7 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import {
   Lock, X, Send, Mic, Square, RotateCcw, Users, UserPlus,
   MessageSquareLock, Ban, Unlock, Search, UserCheck,
-  AlertCircle, Loader2, ShieldAlert, Flame, Swords, Radio, Inbox
+  AlertCircle, Loader2, ShieldAlert, Flame, Swords, Radio, Inbox,
+  Pin, Trash2, Check, CheckCheck, Ghost
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
 
@@ -22,6 +23,9 @@ interface Msg {
   text: string;
   audio_data?: string | null;
   status: 'sent' | 'stuck';
+  is_pinned?: boolean;
+  deleted_for_everyone?: boolean;
+  seen?: boolean;
 }
 
 interface InboxThread {
@@ -42,6 +46,7 @@ const PIN_K = 'dinu_neet2027_secret_pin_v1';
 const GRP_K = 'dinu_neet2027_my_private_group_v1';
 const BLK_K = 'dinu_neet2027_personal_blocks_v1';
 const QUE_K = 'dinu_neet2027_secret_outbox_v1';
+const DEL_ME_K = 'dinu_neet2027_deleted_for_me_v1';
 const LOCAL_CHAT_CACHE = 'dinu_neet2027_local_chats_v1';
 
 const FALLBACK_SB_URL = 'https://twcpuqcgowjwmkruohqw.supabase.co';
@@ -63,13 +68,13 @@ export const SecretVaultModal: React.FC<Props> = ({
   const [selectedPeer, setSelectedPeer] = useState('');
   const [dmChannel, setDmChannel] = useState('');
 
-  // Zero-Bloat Auto Inbox Threads (so incoming messages show up automatically without searching)
   const [inboxThreads, setInboxThreads] = useState<InboxThread[]>([]);
-
   const [group, setGroup] = useState<{ code: string; name: string } | null>(null);
   const [joinCode, setJoinCode] = useState('');
   const [groupName, setGroupName] = useState('');
   const [blocked, setBlocked] = useState<string[]>([]);
+  const [deletedForMe, setDeletedForMe] = useState<string[]>([]);
+
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [queue, setQueue] = useState<Msg[]>([]);
   const [text, setText] = useState('');
@@ -78,13 +83,27 @@ export const SecretVaultModal: React.FC<Props> = ({
   const [sec, setSec] = useState(0);
   const [liveConnected, setLiveConnected] = useState(false);
 
-  const [burnSeconds, setBurnSeconds] = useState<0 | 15>(0);
+  // Presence & Message Controls
+  const [peerTyping, setPeerTyping] = useState(false);
+  const [peerSeen, setPeerSeen] = useState(false);
+  const [activeMsgMenu, setActiveMsgMenu] = useState<string | null>(null);
+  const [pinnedMsgId, setPinnedMsgId] = useState<string | null>(null);
+
+  // Custom Seconds Self-Destruct & Anonymous Mode
+  const [destructSec, setDestructSec] = useState<number>(0); // 0 = off, else custom seconds (5..120)
+  const [customSecInput, setCustomSecInput] = useState<string>('15');
+  const [showDestructPicker, setShowDestructPicker] = useState(false);
+  const [anonymousMode, setAnonymousMode] = useState(false);
+
+  // 1v1 NCERT Quiz Duel
   const [duelOpen, setDuelOpen] = useState(false);
   const [duelAnswers, setDuelAnswers] = useState<Record<number, number>>({});
 
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
+  const typingTimeoutRef = useRef<number | null>(null);
+  const rtChannelRef = useRef<any>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const getSb = useCallback(() => {
@@ -116,12 +135,15 @@ export const SecretVaultModal: React.FC<Props> = ({
     setPin('');
     setErr('');
     setDuelOpen(false);
+    setActiveMsgMenu(null);
+    setShowDestructPicker(false);
     try {
       const fullProf = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
       setSavedPin((fullProf.secret_code || localStorage.getItem(PIN_K) || '').trim());
       const g = localStorage.getItem(GRP_K); if (g) setGroup(JSON.parse(g));
       const b = localStorage.getItem(BLK_K); if (b) setBlocked(JSON.parse(b));
       const q = localStorage.getItem(QUE_K); if (q) setQueue(JSON.parse(q));
+      const dm = localStorage.getItem(DEL_ME_K); if (dm) setDeletedForMe(JSON.parse(dm));
 
       const sb = getSb();
       if (sb && fullProf.username && fullProf.mobile && fullProf.secret_code) {
@@ -138,7 +160,6 @@ export const SecretVaultModal: React.FC<Props> = ({
     } catch {}
   }, [isOpen, currentStudent, getSb]);
 
-  // AUTO-INBOX LOADER: Automatically discovers all incoming/outgoing DM threads for current user
   const refreshInboxThreads = useCallback(async () => {
     if (!unlocked || !myCleanId) return;
     const sb = getSb();
@@ -146,7 +167,7 @@ export const SecretVaultModal: React.FC<Props> = ({
     try {
       const { data } = await sb
         .from('secret_messages')
-        .select('channel_key, sender_username, text, created_at')
+        .select('channel_key, sender_username, text, deleted_for_everyone, created_at')
         .like('channel_key', 'dm_%')
         .order('created_at', { ascending: false })
         .limit(80);
@@ -155,6 +176,7 @@ export const SecretVaultModal: React.FC<Props> = ({
 
       const map = new Map<string, InboxThread>();
       for (const row of data) {
+        if (row.deleted_for_everyone) continue;
         const ch = String(row.channel_key || '');
         if (!ch.startsWith('dm_')) continue;
         const pair = ch.slice(3).split('__');
@@ -229,9 +251,23 @@ export const SecretVaultModal: React.FC<Props> = ({
 
   const channel = tab === 'dm' ? dmChannel : tab === 'group' && group?.code ? `grp_${group.code}` : '';
 
+  const scheduleCustomSelfDestruct = useCallback((msgId: string, seconds: number, chKey: string) => {
+    if (seconds <= 0) return;
+    window.setTimeout(async () => {
+      setMsgs((prev) => prev.filter((x) => x.id !== msgId));
+      setPinnedMsgId((p) => (p === msgId ? null : p));
+      const sb = getSb();
+      if (sb) {
+        try {
+          await sb.from('secret_messages').delete().eq('id', msgId).eq('channel_key', chKey);
+        } catch {}
+      }
+    }, seconds * 1000);
+  }, [getSb]);
+
   const fetchLatestChannelMessages = useCallback(async () => {
     if (!channel) return;
-    const localStuck = queue.filter((m) => m.channel_key === channel);
+    const localStuck = queue.filter((m) => m.channel_key === channel && !deletedForMe.includes(m.id));
     const sb = getSb();
     if (!sb) {
       setMsgs(localStuck);
@@ -245,16 +281,23 @@ export const SecretVaultModal: React.FC<Props> = ({
         .order('created_at', { ascending: false })
         .limit(20);
 
-      const latest20 = Array.isArray(data)
-        ? data.reverse().map((r: any) => ({
-            id: String(r.id),
-            channel_key: String(r.channel_key),
-            sender_username: String(r.sender_username),
-            text: String(r.text),
-            audio_data: r.voice_payload || null,
-            status: 'sent' as const,
-          }))
+      const latest20: Msg[] = Array.isArray(data)
+        ? data
+            .reverse()
+            .filter((r: any) => !r.deleted_for_everyone && !deletedForMe.includes(String(r.id)))
+            .map((r: any) => ({
+              id: String(r.id),
+              channel_key: String(r.channel_key),
+              sender_username: String(r.sender_username),
+              text: String(r.text),
+              audio_data: r.voice_payload || null,
+              status: 'sent' as const,
+              is_pinned: Boolean(r.is_pinned),
+            }))
         : [];
+
+      const pinned = latest20.find((m) => m.is_pinned);
+      setPinnedMsgId(pinned ? pinned.id : null);
 
       try {
         const cache = JSON.parse(localStorage.getItem(LOCAL_CHAT_CACHE) || '{}');
@@ -264,22 +307,34 @@ export const SecretVaultModal: React.FC<Props> = ({
 
       setMsgs([...latest20, ...localStuck]);
 
+      // Parse custom destruct tag [TTL:15s]
       latest20.forEach((m) => {
-        if (m.sender_username !== myHandle && m.text.startsWith('🔥[BURN15]')) {
-          window.setTimeout(async () => {
-            setMsgs((prev) => prev.filter((x) => x.id !== m.id));
-            await sb.from('secret_messages').delete().eq('id', m.id);
-          }, 15000);
+        const match = m.text.match(/^🔥\[TTL:(\d+)s\]/);
+        if (match && m.sender_username !== myHandle) {
+          const secs = Math.min(300, Math.max(2, Number(match[1])));
+          scheduleCustomSelfDestruct(m.id, secs, channel);
         }
       });
+
+      // Emit "seen" broadcast when opening messages from peer
+      if (latest20.some((m) => m.sender_username !== myHandle) && rtChannelRef.current) {
+        rtChannelRef.current.send({
+          type: 'broadcast',
+          event: 'seen',
+          payload: { reader: myHandle },
+        }).catch(() => {});
+      }
     } catch {
       setMsgs(localStuck);
     }
-  }, [channel, queue, getSb, myHandle]);
+  }, [channel, queue, deletedForMe, getSb, myHandle, scheduleCustomSelfDestruct]);
 
+  // Realtime DB + Broadcast (Typing & Seen) + Fast Sync
   useEffect(() => {
     if (!isOpen || !unlocked || !channel) {
       setLiveConnected(false);
+      setPeerTyping(false);
+      setPeerSeen(false);
       return;
     }
 
@@ -289,7 +344,7 @@ export const SecretVaultModal: React.FC<Props> = ({
     let subChannel: any = null;
     if (sb) {
       subChannel = sb
-        .channel(`live_${channel}_${Date.now()}`)
+        .channel(`vault_${channel}`, { config: { broadcast: { ack: false } } })
         .on(
           'postgres_changes',
           {
@@ -303,9 +358,31 @@ export const SecretVaultModal: React.FC<Props> = ({
             void refreshInboxThreads();
           }
         )
+        .on('broadcast', { event: 'typing' }, (ev: any) => {
+          const who = ev?.payload?.sender;
+          if (who && who !== myHandle) {
+            setPeerTyping(true);
+            if (typingTimeoutRef.current) window.clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = window.setTimeout(() => setPeerTyping(false), 1800);
+          }
+        })
+        .on('broadcast', { event: 'seen' }, (ev: any) => {
+          const reader = ev?.payload?.reader;
+          if (reader && reader !== myHandle) {
+            setPeerSeen(true);
+          }
+        })
         .subscribe((status: string) => {
           setLiveConnected(status === 'SUBSCRIBED');
+          if (status === 'SUBSCRIBED') {
+            subChannel.send({
+              type: 'broadcast',
+              event: 'seen',
+              payload: { reader: myHandle },
+            }).catch(() => {});
+          }
         });
+      rtChannelRef.current = subChannel;
     }
 
     const poll = window.setInterval(() => {
@@ -314,17 +391,64 @@ export const SecretVaultModal: React.FC<Props> = ({
 
     return () => {
       window.clearInterval(poll);
+      if (typingTimeoutRef.current) window.clearTimeout(typingTimeoutRef.current);
       if (sb && subChannel) {
         void sb.removeChannel(subChannel);
       }
+      rtChannelRef.current = null;
     };
-  }, [isOpen, unlocked, channel, fetchLatestChannelMessages, refreshInboxThreads, getSb]);
+  }, [isOpen, unlocked, channel, fetchLatestChannelMessages, refreshInboxThreads, getSb, myHandle]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [msgs.length]);
+  }, [msgs.length, peerTyping]);
 
   if (!isOpen) return null;
+
+  const notifyTyping = () => {
+    if (!rtChannelRef.current) return;
+    rtChannelRef.current.send({
+      type: 'broadcast',
+      event: 'typing',
+      payload: { sender: myHandle },
+    }).catch(() => {});
+  };
+
+  const handleDeleteForMe = (msgId: string) => {
+    const next = Array.from(new Set([...deletedForMe, msgId]));
+    setDeletedForMe(next);
+    setMsgs((p) => p.filter((m) => m.id !== msgId));
+    setActiveMsgMenu(null);
+    try { localStorage.setItem(DEL_ME_K, JSON.stringify(next)); } catch {}
+  };
+
+  const handleDeleteForEveryone = async (msgId: string) => {
+    setMsgs((p) => p.filter((m) => m.id !== msgId));
+    setPinnedMsgId((p) => (p === msgId ? null : p));
+    setActiveMsgMenu(null);
+    const sb = getSb();
+    if (sb) {
+      try {
+        await sb.from('secret_messages').delete().eq('id', msgId).eq('channel_key', channel);
+      } catch {}
+    }
+    void refreshInboxThreads();
+  };
+
+  const handleTogglePin = async (msgId: string) => {
+    const nextPin = pinnedMsgId === msgId ? null : msgId;
+    setPinnedMsgId(nextPin);
+    setActiveMsgMenu(null);
+    const sb = getSb();
+    if (sb && channel) {
+      try {
+        await sb.from('secret_messages').update({ is_pinned: false }).eq('channel_key', channel);
+        if (nextPin) {
+          await sb.from('secret_messages').update({ is_pinned: true }).eq('id', nextPin);
+        }
+      } catch {}
+    }
+  };
 
   const checkPin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -343,6 +467,7 @@ export const SecretVaultModal: React.FC<Props> = ({
     setSearchQuery('');
     setSearchFocused(false);
     setSearchResults([]);
+    setPeerSeen(false);
     const pair = [myHandle.replace('@', ''), targetUsername.replace('@', '')].sort().join('__');
     setDmChannel(`dm_${pair}`);
   };
@@ -357,7 +482,12 @@ export const SecretVaultModal: React.FC<Props> = ({
       setMsgs((p) => [...p.filter((x) => x.id !== draft.id), stuck]);
     };
 
+    setPeerSeen(false);
     setMsgs((p) => [...p.filter((x) => x.id !== draft.id), { ...draft, status: 'sent' }]);
+
+    if (destructSec > 0) {
+      scheduleCustomSelfDestruct(draft.id, destructSec, draft.channel_key);
+    }
 
     if (!sb || (typeof navigator !== 'undefined' && !navigator.onLine)) return saveStuck();
     try {
@@ -396,12 +526,14 @@ export const SecretVaultModal: React.FC<Props> = ({
     if (!currentStudent) return onRequireLogin();
     setSending(true);
     const raw = text.trim();
-    const finalPayload = burnSeconds === 15 ? `🔥[BURN15] ${raw}` : raw;
+    const senderLabel = anonymousMode && tab === 'group' ? '👻 Anonymous Aspirant' : myHandle;
+    const ttlPrefix = destructSec > 0 ? `🔥[TTL:${destructSec}s] ` : '';
+    const finalPayload = `${ttlPrefix}${raw}`;
     setText('');
     await pushMsg({
       id: `m_${Date.now()}`,
       channel_key: channel,
-      sender_username: myHandle,
+      sender_username: senderLabel,
       text: finalPayload,
       status: 'sent',
     });
@@ -481,28 +613,56 @@ export const SecretVaultModal: React.FC<Props> = ({
     }
   };
 
+  const pinnedMessage = msgs.find((m) => m.id === pinnedMsgId);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm">
-      <div className="flex h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+      <div className="flex h-[86vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-slate-700/90 bg-slate-900 text-slate-100 shadow-2xl">
+        {/* Top Header */}
         <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <MessageSquareLock className="w-5 h-5 text-amber-400" />
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-amber-500/15 text-amber-400">
+              <MessageSquareLock className="w-5 h-5" />
+            </div>
             <div>
               <h3 className="flex items-center gap-1.5 text-xs font-extrabold text-white">
-                DINU SARAN • Secret Chat
+                {tab === 'dm' && selectedPeer ? selectedPeer : 'DINU SARAN • Secret Vault'}
                 {channel && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[9px] text-emerald-300">
-                    <Radio className="w-2.5 h-2.5 animate-pulse" /> {liveConnected ? 'LIVE' : 'SYNC'}
+                    <Radio className="w-2.5 h-2.5 animate-pulse" /> {liveConnected ? 'ONLINE' : 'SYNC'}
                   </span>
                 )}
               </h3>
-              <p className="text-[10px] text-slate-400">{myHandle} • Auto Inbox & Live Sync</p>
+              <p className="text-[10px] text-slate-400">
+                {peerTyping ? (
+                  <span className="font-bold text-emerald-400">✍️ typing...</span>
+                ) : (
+                  `${myHandle} • End-to-End NEET Vault`
+                )}
+              </p>
             </div>
           </div>
-          <button type="button" onClick={onClose} className="rounded-xl p-1.5 text-slate-400 hover:text-white">
+          <button type="button" onClick={onClose} className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white">
             <X className="w-4 h-4" />
           </button>
         </div>
+
+        {/* Pinned Message Banner */}
+        {unlocked && pinnedMessage && (
+          <div className="flex items-center justify-between border-b border-amber-500/25 bg-amber-950/35 px-3.5 py-2 text-[11px]">
+            <div className="flex min-w-0 items-center gap-2 pr-2">
+              <Pin className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+              <span className="truncate font-semibold text-amber-100">{pinnedMessage.text}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleTogglePin(pinnedMessage.id)}
+              className="text-[10px] font-bold text-amber-300 hover:underline"
+            >
+              Unpin
+            </button>
+          </div>
+        )}
 
         {!unlocked ? (
           <form onSubmit={checkPin} className="flex flex-1 flex-col items-center justify-center space-y-4 p-6 text-center">
@@ -529,11 +689,21 @@ export const SecretVaultModal: React.FC<Props> = ({
           </form>
         ) : (
           <>
-            <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] font-bold">
+            {/* Navigation & Quick Actions */}
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] font-bold">
               <button type="button" onClick={() => setTab('dm')} className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${tab === 'dm' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}>
-                <Inbox className="w-3 h-3" /> Inbox & Search {inboxThreads.length > 0 && `(${inboxThreads.length})`}
+                <Inbox className="w-3 h-3" /> Inbox {inboxThreads.length > 0 && `(${inboxThreads.length})`}
               </button>
-              <button type="button" onClick={() => setTab('group')} className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${tab === 'group' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}><Users className="w-3 h-3" /> Private Group</button>
+              <button type="button" onClick={() => setTab('group')} className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${tab === 'group' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}><Users className="w-3 h-3" /> Group</button>
+              {tab === 'group' && channel && (
+                <button
+                  type="button"
+                  onClick={() => setAnonymousMode((v) => !v)}
+                  className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${anonymousMode ? 'bg-purple-600 text-white' : 'bg-slate-800 text-slate-300'}`}
+                >
+                  <Ghost className="w-3 h-3" /> {anonymousMode ? 'Anon ON' : 'Anon'}
+                </button>
+              )}
               {channel && (
                 <button
                   type="button"
@@ -569,7 +739,7 @@ export const SecretVaultModal: React.FC<Props> = ({
                         value={searchQuery}
                         onFocus={() => setSearchFocused(true)}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="नया @username या नाम सर्च करें..."
+                        placeholder="@username या नाम सर्च करें..."
                         className="flex-1 bg-transparent text-xs text-white focus:outline-none"
                       />
                       {searchingUsers && <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />}
@@ -578,9 +748,7 @@ export const SecretVaultModal: React.FC<Props> = ({
                     {(searchFocused || searchQuery.trim()) && (
                       <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 shadow-xl">
                         {searchResults.length === 0 && !searchingUsers ? (
-                          <p className="px-3 py-2 text-[11px] text-slate-400">
-                            कोई दूसरा रजिस्टर्ड यूज़र नहीं मिला।
-                          </p>
+                          <p className="px-3 py-2 text-[11px] text-slate-400">कोई दूसरा रजिस्टर्ड यूज़र नहीं मिला।</p>
                         ) : (
                           searchResults.map((u) => (
                             <button
@@ -602,7 +770,6 @@ export const SecretVaultModal: React.FC<Props> = ({
                       </div>
                     )}
 
-                    {/* AUTO-DISCOVERED INBOX CHATS (No search needed when someone messages you!) */}
                     {inboxThreads.length > 0 && (
                       <div className="flex gap-1.5 overflow-x-auto pb-0.5">
                         {inboxThreads.map((th) => {
@@ -686,13 +853,12 @@ export const SecretVaultModal: React.FC<Props> = ({
                   </div>
                 )}
 
+                {/* Messages Stream */}
                 <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
                   {!channel ? (
                     inboxThreads.length > 0 ? (
                       <div className="space-y-2">
-                        <p className="text-[11px] font-bold text-slate-400">
-                          📩 आपके इनबॉक्स की चैट्स (खोलने के लिए टैप करें):
-                        </p>
+                        <p className="text-[11px] font-bold text-slate-400">📩 Inbox Chats (टैप करके खोलें):</p>
                         {inboxThreads.map((th) => (
                           <button
                             key={th.channelKey}
@@ -715,42 +881,158 @@ export const SecretVaultModal: React.FC<Props> = ({
                       </div>
                     ) : (
                       <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
-                        ऊपर सर्च बार में @username चुनें या जब कोई आपको मैसेज भेजेगा तो वह सीधे यहाँ इनबॉक्स में दिख जाएगा।
+                        ऊपर सर्च बार में @username चुनें या आने वाले मैसेज सीधे यहाँ इनबॉक्स में दिखेंगे।
                       </div>
                     )
                   ) : (
-                    msgs.map((m) => (
-                      <div key={m.id} className={`flex max-w-[84%] flex-col ${m.sender_username === myHandle ? 'ml-auto items-end' : 'mr-auto items-start'}`}>
-                        <span className="mb-0.5 text-[10px] text-slate-400">{m.sender_username === myHandle ? 'You' : m.sender_username}</span>
-                        <div className={`rounded-2xl px-3 py-2 text-xs ${m.sender_username === myHandle ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-100'}`}>
-                          {m.audio_data ? <audio controls src={m.audio_data} className="h-8 w-48" /> : m.text}
-                        </div>
-                        {m.status === 'stuck' && (
-                          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-amber-400">
-                            <ShieldAlert className="w-3 h-3" /> <span>⏳ Stuck (Offline)</span>
-                            <button type="button" onClick={() => pushMsg(m)} className="inline-flex items-center gap-0.5 rounded bg-amber-500/20 px-1.5 py-0.5 font-bold"><RotateCcw className="w-2.5 h-2.5" /> Retry</button>
+                    msgs.map((m, idx) => {
+                      const isMine = m.sender_username === myHandle;
+                      const isLastMine = isMine && idx === msgs.length - 1;
+                      const menuOpen = activeMsgMenu === m.id;
+                      return (
+                        <div key={m.id} className={`flex max-w-[85%] flex-col ${isMine ? 'ml-auto items-end' : 'mr-auto items-start'}`}>
+                          <div className="mb-0.5 flex items-center gap-1.5 text-[10px] text-slate-400">
+                            <span>{isMine ? 'You' : m.sender_username}</span>
+                            {pinnedMsgId === m.id && <Pin className="w-2.5 h-2.5 text-amber-400" />}
                           </div>
-                        )}
-                      </div>
-                    ))
+
+                          <div
+                            onClick={() => setActiveMsgMenu(menuOpen ? null : m.id)}
+                            className={`cursor-pointer rounded-2xl px-3.5 py-2 text-xs shadow transition ${
+                              isMine ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-100'
+                            }`}
+                          >
+                            {m.audio_data ? <audio controls src={m.audio_data} className="h-8 w-48" /> : m.text}
+                          </div>
+
+                          {/* Tap-to-Action Menu: Pin, Delete for Me, Delete for Everyone */}
+                          {menuOpen && (
+                            <div className="mt-1 flex flex-wrap items-center gap-1 rounded-xl border border-slate-700 bg-slate-950 p-1 text-[10px] font-bold shadow-lg">
+                              <button
+                                type="button"
+                                onClick={() => void handleTogglePin(m.id)}
+                                className="inline-flex items-center gap-1 rounded-lg bg-amber-500/20 px-2 py-1 text-amber-300"
+                              >
+                                <Pin className="w-2.5 h-2.5" /> {pinnedMsgId === m.id ? 'Unpin' : 'Pin'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteForMe(m.id)}
+                                className="inline-flex items-center gap-1 rounded-lg bg-slate-800 px-2 py-1 text-slate-200"
+                              >
+                                <Trash2 className="w-2.5 h-2.5" /> Delete for Me
+                              </button>
+                              {isMine && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeleteForEveryone(m.id)}
+                                  className="inline-flex items-center gap-1 rounded-lg bg-rose-600/30 px-2 py-1 text-rose-300"
+                                >
+                                  <Trash2 className="w-2.5 h-2.5" /> Delete for Everyone
+                                </button>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Delivery & Seen Status */}
+                          {isMine && m.status === 'sent' && (
+                            <span className="mt-0.5 inline-flex items-center gap-0.5 text-[9px] text-slate-400">
+                              {peerSeen && isLastMine ? (
+                                <>
+                                  <CheckCheck className="w-3 h-3 text-cyan-400" /> <span className="text-cyan-400 font-bold">Seen</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Check className="w-3 h-3 text-slate-400" /> Delivered
+                                </>
+                              )}
+                            </span>
+                          )}
+
+                          {m.status === 'stuck' && (
+                            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-amber-400">
+                              <ShieldAlert className="w-3 h-3" /> <span>⏳ Stuck (Offline)</span>
+                              <button type="button" onClick={() => pushMsg(m)} className="inline-flex items-center gap-0.5 rounded bg-amber-500/20 px-1.5 py-0.5 font-bold"><RotateCcw className="w-2.5 h-2.5" /> Retry</button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
                   )}
                   <div ref={bottomRef} />
                 </div>
 
+                {/* Custom Seconds Self-Destruct Picker Popover */}
+                {channel && showDestructPicker && (
+                  <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-800 bg-slate-950/95 px-3 py-2 text-[11px]">
+                    <span className="font-bold text-orange-400">🔥 Self-Destruct:</span>
+                    {[0, 5, 15, 30, 60].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => { setDestructSec(s); setShowDestructPicker(false); }}
+                        className={`rounded-lg px-2 py-1 font-bold ${destructSec === s ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-300'}`}
+                      >
+                        {s === 0 ? 'Off' : `${s}s`}
+                      </button>
+                    ))}
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={2}
+                        max={300}
+                        value={customSecInput}
+                        onChange={(e) => setCustomSecInput(e.target.value)}
+                        className="w-14 rounded-lg border border-slate-700 bg-slate-900 px-1.5 py-1 text-center text-[11px] text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const v = Math.min(300, Math.max(2, Number(customSecInput) || 10));
+                          setDestructSec(v);
+                          setShowDestructPicker(false);
+                        }}
+                        className="rounded-lg bg-amber-500 px-2 py-1 font-extrabold text-slate-950"
+                      >
+                        Set s
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Composer */}
                 {channel && (
                   <form onSubmit={sendText} className="flex items-center gap-1.5 border-t border-slate-800 bg-slate-950 p-2.5">
                     <button
                       type="button"
-                      onClick={() => setBurnSeconds((b) => (b === 15 ? 0 : 15))}
-                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${burnSeconds === 15 ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400'}`}
-                      title="Burn-After-Reading (15s Self-Destruct)"
+                      onClick={() => setShowDestructPicker((v) => !v)}
+                      className={`flex h-9 shrink-0 items-center justify-center gap-1 rounded-xl px-2 text-[10px] font-extrabold ${
+                        destructSec > 0 ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400'
+                      }`}
+                      title="Custom Seconds Self-Destruct"
                     >
-                      <Flame className="w-4 h-4" />
+                      <Flame className="w-3.5 h-3.5" />
+                      {destructSec > 0 && `${destructSec}s`}
                     </button>
                     <button type="button" onClick={rec ? stopAudio : startAudio} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${rec ? 'animate-pulse bg-rose-600 text-white' : 'bg-slate-800 text-slate-300'}`}>
                       {rec ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                     </button>
-                    <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder={rec ? `Recording ${sec}s/15s...` : burnSeconds === 15 ? '🔥 15s Self-Destruct संदेश...' : 'संदेश लिखें...'} className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white" />
+                    <input
+                      type="text"
+                      value={text}
+                      onChange={(e) => {
+                        setText(e.target.value);
+                        notifyTyping();
+                      }}
+                      placeholder={
+                        rec
+                          ? `Recording ${sec}s/15s...`
+                          : destructSec > 0
+                          ? `🔥 ${destructSec}s बाद अपने-आप नष्ट होने वाला संदेश...`
+                          : 'संदेश लिखें...'
+                      }
+                      className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                    />
                     <button type="submit" disabled={sending || !text.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40">
                       {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                     </button>
