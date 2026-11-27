@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   Lock, X, Send, Mic, Square, RotateCcw, Users, UserPlus,
   MessageSquareLock, Ban, Unlock, Search, UserCheck,
-  AlertCircle, Loader2, ShieldAlert, Flame, Swords, Radio
+  AlertCircle, Loader2, ShieldAlert, Flame, Swords, Radio, Inbox
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
 
@@ -24,6 +24,14 @@ interface Msg {
   status: 'sent' | 'stuck';
 }
 
+interface InboxThread {
+  peerUsername: string;
+  channelKey: string;
+  lastText: string;
+  lastSender: string;
+  isIncoming: boolean;
+}
+
 const DUEL_BANK = [
   { q: '70S राइबोसोम की दो उप-इकाइयाँ कौन-सी हैं?', opts: ['50S & 30S', '60S & 40S', '40S & 30S', '50S & 20S'], ans: 0 },
   { q: 'SF6 में संकरण (Hybridisation) क्या होता है?', opts: ['sp3', 'sp3d', 'sp3d2', 'dsp2'], ans: 2 },
@@ -36,8 +44,8 @@ const BLK_K = 'dinu_neet2027_personal_blocks_v1';
 const QUE_K = 'dinu_neet2027_secret_outbox_v1';
 const LOCAL_CHAT_CACHE = 'dinu_neet2027_local_chats_v1';
 
-// Fallback project credentials if env/settings are not yet hydrated
 const FALLBACK_SB_URL = 'https://twcpuqcgowjwmkruohqw.supabase.co';
+const FALLBACK_SB_KEY = 'sb_publishable_5JxNjgYP025of9f0LTusBw_FqHHrzmn';
 
 export const SecretVaultModal: React.FC<Props> = ({
   isOpen, onClose, currentStudent, settings, onRequireLogin
@@ -54,6 +62,9 @@ export const SecretVaultModal: React.FC<Props> = ({
   const [searchFocused, setSearchFocused] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState('');
   const [dmChannel, setDmChannel] = useState('');
+
+  // Zero-Bloat Auto Inbox Threads (so incoming messages show up automatically without searching)
+  const [inboxThreads, setInboxThreads] = useState<InboxThread[]>([]);
 
   const [group, setGroup] = useState<{ code: string; name: string } | null>(null);
   const [joinCode, setJoinCode] = useState('');
@@ -80,7 +91,7 @@ export const SecretVaultModal: React.FC<Props> = ({
     try {
       const env = (import.meta as unknown as { env?: Record<string, string> })?.env || {};
       const u = String(settings?.supabaseUrl || env.VITE_SUPABASE_URL || FALLBACK_SB_URL).trim();
-      const k = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || '').trim();
+      const k = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || FALLBACK_SB_KEY).trim();
       return u && k && u.startsWith('http') ? createClient(u, k) : null;
     } catch {
       return null;
@@ -97,6 +108,8 @@ export const SecretVaultModal: React.FC<Props> = ({
     }
   })();
 
+  const myCleanId = myHandle.replace(/^@+/, '');
+
   useEffect(() => {
     if (!isOpen) return;
     setUnlocked(false);
@@ -110,7 +123,6 @@ export const SecretVaultModal: React.FC<Props> = ({
       const b = localStorage.getItem(BLK_K); if (b) setBlocked(JSON.parse(b));
       const q = localStorage.getItem(QUE_K); if (q) setQueue(JSON.parse(q));
 
-      // Auto-sync current user into student_registry so others can always find them
       const sb = getSb();
       if (sb && fullProf.username && fullProf.mobile && fullProf.secret_code) {
         const cleanU = String(fullProf.username).trim().toLowerCase();
@@ -126,7 +138,58 @@ export const SecretVaultModal: React.FC<Props> = ({
     } catch {}
   }, [isOpen, currentStudent, getSb]);
 
-  // Smart Live Search (works on focus & as-you-type, with or without '@')
+  // AUTO-INBOX LOADER: Automatically discovers all incoming/outgoing DM threads for current user
+  const refreshInboxThreads = useCallback(async () => {
+    if (!unlocked || !myCleanId) return;
+    const sb = getSb();
+    if (!sb) return;
+    try {
+      const { data } = await sb
+        .from('secret_messages')
+        .select('channel_key, sender_username, text, created_at')
+        .like('channel_key', 'dm_%')
+        .order('created_at', { ascending: false })
+        .limit(80);
+
+      if (!Array.isArray(data)) return;
+
+      const map = new Map<string, InboxThread>();
+      for (const row of data) {
+        const ch = String(row.channel_key || '');
+        if (!ch.startsWith('dm_')) continue;
+        const pair = ch.slice(3).split('__');
+        if (pair.length !== 2 || !pair.includes(myCleanId)) continue;
+
+        const otherClean = pair[0] === myCleanId ? pair[1] : pair[0];
+        if (!otherClean) continue;
+        const peerHandle = `@${otherClean}`;
+        if (blocked.includes(peerHandle)) continue;
+
+        if (!map.has(ch)) {
+          const sender = String(row.sender_username || '');
+          map.set(ch, {
+            peerUsername: peerHandle,
+            channelKey: ch,
+            lastText: String(row.text || ''),
+            lastSender: sender,
+            isIncoming: sender.toLowerCase() !== myHandle,
+          });
+        }
+      }
+      setInboxThreads(Array.from(map.values()));
+    } catch {}
+  }, [unlocked, myCleanId, myHandle, blocked, getSb]);
+
+  useEffect(() => {
+    if (!isOpen || !unlocked) return;
+    void refreshInboxThreads();
+    const t = window.setInterval(() => {
+      void refreshInboxThreads();
+    }, 3000);
+    return () => window.clearInterval(t);
+  }, [isOpen, unlocked, refreshInboxThreads]);
+
+  // Smart Live Search
   useEffect(() => {
     if (!isOpen || !unlocked || tab !== 'dm') return;
     if (!searchFocused && !searchQuery.trim()) return;
@@ -214,7 +277,6 @@ export const SecretVaultModal: React.FC<Props> = ({
     }
   }, [channel, queue, getSb, myHandle]);
 
-  // REALTIME LIVE SUBSCRIPTION + 2.5s FAST SYNC (NO MANUAL REFRESH NEEDED)
   useEffect(() => {
     if (!isOpen || !unlocked || !channel) {
       setLiveConnected(false);
@@ -238,6 +300,7 @@ export const SecretVaultModal: React.FC<Props> = ({
           },
           () => {
             void fetchLatestChannelMessages();
+            void refreshInboxThreads();
           }
         )
         .subscribe((status: string) => {
@@ -245,7 +308,6 @@ export const SecretVaultModal: React.FC<Props> = ({
         });
     }
 
-    // Fast background sync every 2.5s so messages always arrive instantly even on mobile networks
     const poll = window.setInterval(() => {
       void fetchLatestChannelMessages();
     }, 2500);
@@ -256,7 +318,7 @@ export const SecretVaultModal: React.FC<Props> = ({
         void sb.removeChannel(subChannel);
       }
     };
-  }, [isOpen, unlocked, channel, fetchLatestChannelMessages, getSb]);
+  }, [isOpen, unlocked, channel, fetchLatestChannelMessages, refreshInboxThreads, getSb]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -295,7 +357,6 @@ export const SecretVaultModal: React.FC<Props> = ({
       setMsgs((p) => [...p.filter((x) => x.id !== draft.id), stuck]);
     };
 
-    // Optimistically show message immediately on sender's screen
     setMsgs((p) => [...p.filter((x) => x.id !== draft.id), { ...draft, status: 'sent' }]);
 
     if (!sb || (typeof navigator !== 'undefined' && !navigator.onLine)) return saveStuck();
@@ -323,6 +384,7 @@ export const SecretVaultModal: React.FC<Props> = ({
       const nq = queue.filter((x) => x.id !== draft.id);
       setQueue(nq);
       try { localStorage.setItem(QUE_K, JSON.stringify(nq)); } catch {}
+      void refreshInboxThreads();
     } catch {
       saveStuck();
     }
@@ -434,7 +496,7 @@ export const SecretVaultModal: React.FC<Props> = ({
                   </span>
                 )}
               </h3>
-              <p className="text-[10px] text-slate-400">{myHandle} • Instant Realtime Vault</p>
+              <p className="text-[10px] text-slate-400">{myHandle} • Auto Inbox & Live Sync</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl p-1.5 text-slate-400 hover:text-white">
@@ -468,7 +530,9 @@ export const SecretVaultModal: React.FC<Props> = ({
         ) : (
           <>
             <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] font-bold">
-              <button type="button" onClick={() => setTab('dm')} className={`rounded-xl px-2.5 py-1.5 ${tab === 'dm' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}>Direct Search</button>
+              <button type="button" onClick={() => setTab('dm')} className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${tab === 'dm' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}>
+                <Inbox className="w-3 h-3" /> Inbox & Search {inboxThreads.length > 0 && `(${inboxThreads.length})`}
+              </button>
               <button type="button" onClick={() => setTab('group')} className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${tab === 'group' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}><Users className="w-3 h-3" /> Private Group</button>
               {channel && (
                 <button
@@ -497,7 +561,7 @@ export const SecretVaultModal: React.FC<Props> = ({
             ) : (
               <div className="flex flex-1 flex-col overflow-hidden">
                 {tab === 'dm' ? (
-                  <div className="relative border-b border-slate-800 bg-slate-950/50 p-2.5">
+                  <div className="relative border-b border-slate-800 bg-slate-950/50 p-2.5 space-y-2">
                     <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5">
                       <Search className="w-3.5 h-3.5 text-slate-400" />
                       <input
@@ -505,17 +569,17 @@ export const SecretVaultModal: React.FC<Props> = ({
                         value={searchQuery}
                         onFocus={() => setSearchFocused(true)}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="@username या नाम सर्च करें (टैप करके लिस्ट देखें)..."
+                        placeholder="नया @username या नाम सर्च करें..."
                         className="flex-1 bg-transparent text-xs text-white focus:outline-none"
                       />
                       {searchingUsers && <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />}
                     </div>
 
                     {(searchFocused || searchQuery.trim()) && (
-                      <div className="mt-1.5 max-h-44 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 shadow-xl">
+                      <div className="max-h-40 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 shadow-xl">
                         {searchResults.length === 0 && !searchingUsers ? (
-                          <p className="px-3 py-2.5 text-[11px] text-slate-400">
-                            कोई दूसरा रजिस्टर्ड यूज़र नहीं मिला (अपनी खुद की ID सर्च में नहीं दिखती; दूसरे अकाउंट से रजिस्टर होने पर यहाँ दिखेगी)।
+                          <p className="px-3 py-2 text-[11px] text-slate-400">
+                            कोई दूसरा रजिस्टर्ड यूज़र नहीं मिला।
                           </p>
                         ) : (
                           searchResults.map((u) => (
@@ -538,8 +602,36 @@ export const SecretVaultModal: React.FC<Props> = ({
                       </div>
                     )}
 
+                    {/* AUTO-DISCOVERED INBOX CHATS (No search needed when someone messages you!) */}
+                    {inboxThreads.length > 0 && (
+                      <div className="flex gap-1.5 overflow-x-auto pb-0.5">
+                        {inboxThreads.map((th) => {
+                          const active = selectedPeer === th.peerUsername;
+                          return (
+                            <button
+                              key={th.channelKey}
+                              type="button"
+                              onClick={() => selectRegisteredUser(th.peerUsername)}
+                              className={`flex shrink-0 items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-left text-[11px] transition ${
+                                active
+                                  ? 'border-indigo-500 bg-indigo-600/30 text-white'
+                                  : 'border-slate-700 bg-slate-900 text-slate-200 hover:border-amber-500/50'
+                              }`}
+                            >
+                              <span className="font-extrabold text-amber-300">{th.peerUsername}</span>
+                              {th.isIncoming && !active && (
+                                <span className="rounded-full bg-emerald-500 px-1.5 py-0.2 text-[9px] font-extrabold text-slate-950">
+                                  NEW
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
                     {selectedPeer && (
-                      <div className="mt-2 flex items-center justify-between rounded-xl bg-indigo-950/50 px-3 py-1.5 text-xs">
+                      <div className="flex items-center justify-between rounded-xl bg-indigo-950/50 px-3 py-1.5 text-xs">
                         <span className="font-extrabold text-white">Chatting with {selectedPeer}</span>
                         <button type="button" onClick={() => toggleBlk(selectedPeer)} className="rounded bg-rose-500/20 px-2 py-0.5 text-[10px] font-bold text-rose-300">
                           Block User
@@ -596,9 +688,36 @@ export const SecretVaultModal: React.FC<Props> = ({
 
                 <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
                   {!channel ? (
-                    <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
-                      ऊपर सर्च बार पर टैप करके रजिस्टर्ड @username चुनें या Private Study Group खोलें।
-                    </div>
+                    inboxThreads.length > 0 ? (
+                      <div className="space-y-2">
+                        <p className="text-[11px] font-bold text-slate-400">
+                          📩 आपके इनबॉक्स की चैट्स (खोलने के लिए टैप करें):
+                        </p>
+                        {inboxThreads.map((th) => (
+                          <button
+                            key={th.channelKey}
+                            type="button"
+                            onClick={() => selectRegisteredUser(th.peerUsername)}
+                            className="flex w-full items-center justify-between rounded-2xl border border-slate-800 bg-slate-950/80 px-3.5 py-2.5 text-left hover:border-indigo-500/50"
+                          >
+                            <div className="min-w-0 pr-2">
+                              <p className="text-xs font-extrabold text-amber-300">{th.peerUsername}</p>
+                              <p className="truncate text-[11px] text-slate-300">
+                                {th.isIncoming ? '' : 'You: '}
+                                {th.lastText}
+                              </p>
+                            </div>
+                            <span className="shrink-0 rounded-xl bg-indigo-600/20 px-2.5 py-1 text-[10px] font-bold text-indigo-300">
+                              Open →
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
+                        ऊपर सर्च बार में @username चुनें या जब कोई आपको मैसेज भेजेगा तो वह सीधे यहाँ इनबॉक्स में दिख जाएगा।
+                      </div>
+                    )
                   ) : (
                     msgs.map((m) => (
                       <div key={m.id} className={`flex max-w-[84%] flex-col ${m.sender_username === myHandle ? 'ml-auto items-end' : 'mr-auto items-start'}`}>
