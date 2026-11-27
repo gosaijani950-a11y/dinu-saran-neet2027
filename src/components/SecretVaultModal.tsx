@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   Lock, X, Send, Mic, Square, RotateCcw, Users, UserPlus,
   MessageSquareLock, Ban, Unlock, Search, UserCheck,
-  AlertCircle, Loader2, ShieldAlert
+  AlertCircle, Loader2, ShieldAlert, Flame, Swords
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
 
@@ -23,6 +23,12 @@ interface Msg {
   audio_data?: string | null;
   status: 'sent' | 'stuck';
 }
+
+const DUEL_BANK = [
+  { q: '70S राइबोसोम की दो उप-इकाइयाँ कौन-सी हैं?', opts: ['50S & 30S', '60S & 40S', '40S & 30S', '50S & 20S'], ans: 0 },
+  { q: 'SF6 में संकरण (Hybridisation) क्या होता है?', opts: ['sp3', 'sp3d', 'sp3d2', 'dsp2'], ans: 2 },
+  { q: 'मानव शुक्राणु के शीर्ष पर कौन-सी टोपी होती है?', opts: ['सेंट्रिओल', 'एक्रोसोम', 'माइटोकॉन्ड्रिया', 'नेबेनकर्न'], ans: 1 },
+];
 
 const PIN_K = 'dinu_neet2027_secret_pin_v1';
 const GRP_K = 'dinu_neet2027_my_private_group_v1';
@@ -56,6 +62,13 @@ export const SecretVaultModal: React.FC<Props> = ({
   const [rec, setRec] = useState(false);
   const [sec, setSec] = useState(0);
 
+  // Feature #2: Burn-After-Reading Toggle (0 = Normal, 15 = 15s Self-Destruct)
+  const [burnSeconds, setBurnSeconds] = useState<0 | 15>(0);
+
+  // Feature #1: 1v1 NCERT Quiz Duel State
+  const [duelOpen, setDuelOpen] = useState(false);
+  const [duelAnswers, setDuelAnswers] = useState<Record<number, number>>({});
+
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
@@ -76,6 +89,7 @@ export const SecretVaultModal: React.FC<Props> = ({
     setUnlocked(false);
     setPin('');
     setErr('');
+    setDuelOpen(false);
     try {
       const fullProf = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
       setSavedPin((fullProf.secret_code || localStorage.getItem(PIN_K) || '').trim());
@@ -94,6 +108,7 @@ export const SecretVaultModal: React.FC<Props> = ({
     }
   })();
 
+  // Instagram-Style Live User Search
   useEffect(() => {
     if (!isOpen || !unlocked || tab !== 'dm') return;
     const cleanQ = searchQuery.trim().toLowerCase().replace(/^@+/, '');
@@ -157,9 +172,19 @@ export const SecretVaultModal: React.FC<Props> = ({
           localStorage.setItem(LOCAL_CHAT_CACHE, JSON.stringify(cache));
         } catch {}
         setMsgs([...latest20, ...localStuck]);
+
+        // Auto-burn any incoming [BURN15] message after 15 seconds
+        latest20.forEach((m) => {
+          if (m.sender_username !== myHandle && m.text.startsWith('🔥[BURN15]')) {
+            window.setTimeout(async () => {
+              setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+              await sb.from('secret_messages').delete().eq('id', m.id);
+            }, 15000);
+          }
+        });
       })
       .catch(() => setMsgs(localStuck));
-  }, [isOpen, unlocked, channel, queue]);
+  }, [isOpen, unlocked, channel, queue, myHandle]);
 
   if (!isOpen) return null;
 
@@ -229,16 +254,34 @@ export const SecretVaultModal: React.FC<Props> = ({
     if (!text.trim() || !channel || sending) return;
     if (!currentStudent) return onRequireLogin();
     setSending(true);
-    const t = text.trim();
+    const raw = text.trim();
+    const finalPayload = burnSeconds === 15 ? `🔥[BURN15] ${raw}` : raw;
     setText('');
     await pushMsg({
       id: `m_${Date.now()}`,
       channel_key: channel,
       sender_username: myHandle,
-      text: t,
+      text: finalPayload,
       status: 'sent',
     });
     setSending(false);
+  };
+
+  const submitDuelChallenge = async () => {
+    let score = 0;
+    DUEL_BANK.forEach((item, idx) => {
+      if (duelAnswers[idx] === item.ans) score += 4;
+      else if (duelAnswers[idx] !== undefined) score -= 1;
+    });
+    setDuelOpen(false);
+    setDuelAnswers({});
+    await pushMsg({
+      id: `duel_${Date.now()}`,
+      channel_key: channel,
+      sender_username: myHandle,
+      text: `⚔️ 1v1 NCERT Quiz Duel Score: ${score} / 12 (+4/-1)! क्या आप इसे बीट कर सकते हैं?`,
+      status: 'sent',
+    });
   };
 
   const stopAudio = () => {
@@ -299,7 +342,7 @@ export const SecretVaultModal: React.FC<Props> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm">
-      <div className="flex h-[84vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+      <div className="flex h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950 px-4 py-3">
           <div className="flex items-center gap-2">
             <MessageSquareLock className="w-5 h-5 text-amber-400" />
@@ -341,6 +384,15 @@ export const SecretVaultModal: React.FC<Props> = ({
             <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] font-bold">
               <button type="button" onClick={() => setTab('dm')} className={`rounded-xl px-2.5 py-1.5 ${tab === 'dm' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}>Direct Search</button>
               <button type="button" onClick={() => setTab('group')} className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${tab === 'group' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'}`}><Users className="w-3 h-3" /> Private Group</button>
+              {channel && (
+                <button
+                  type="button"
+                  onClick={() => setDuelOpen((v) => !v)}
+                  className="flex items-center gap-1 rounded-xl bg-amber-500/20 px-2.5 py-1.5 text-amber-300 hover:bg-amber-500/30"
+                >
+                  <Swords className="w-3 h-3" /> 1v1 Duel
+                </button>
+              )}
               <button type="button" onClick={() => setTab('blocked')} className={`ml-auto rounded-xl px-2 py-1.5 ${tab === 'blocked' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400'}`}><Ban className="w-3.5 h-3.5" /></button>
             </div>
 
@@ -426,6 +478,33 @@ export const SecretVaultModal: React.FC<Props> = ({
                   </div>
                 )}
 
+                {/* 1v1 NCERT Quiz Duel Mini-Overlay */}
+                {duelOpen && channel && (
+                  <div className="border-b border-amber-500/30 bg-amber-950/30 p-3 space-y-2 text-xs">
+                    <p className="font-extrabold text-amber-300">⚔️ 1v1 NCERT Quiz Duel (+4 / -1)</p>
+                    {DUEL_BANK.map((d, i) => (
+                      <div key={i} className="space-y-1">
+                        <p className="text-[11px] font-bold">{i + 1}. {d.q}</p>
+                        <div className="grid grid-cols-2 gap-1">
+                          {d.opts.map((o, oi) => (
+                            <button
+                              key={oi}
+                              type="button"
+                              onClick={() => setDuelAnswers((p) => ({ ...p, [i]: oi }))}
+                              className={`rounded-lg px-2 py-1 text-left text-[10px] font-bold ${duelAnswers[i] === oi ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-200'}`}
+                            >
+                              {o}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    <button type="button" onClick={submitDuelChallenge} className="w-full rounded-xl bg-amber-500 py-1.5 text-xs font-extrabold text-slate-950">
+                      Send Duel Score to Chat
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
                   {!channel ? (
                     <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
@@ -451,10 +530,18 @@ export const SecretVaultModal: React.FC<Props> = ({
 
                 {channel && (
                   <form onSubmit={sendText} className="flex items-center gap-1.5 border-t border-slate-800 bg-slate-950 p-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setBurnSeconds((b) => (b === 15 ? 0 : 15))}
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${burnSeconds === 15 ? 'bg-orange-600 text-white' : 'bg-slate-800 text-slate-400'}`}
+                      title="Burn-After-Reading (15s Self-Destruct)"
+                    >
+                      <Flame className="w-4 h-4" />
+                    </button>
                     <button type="button" onClick={rec ? stopAudio : startAudio} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${rec ? 'animate-pulse bg-rose-600 text-white' : 'bg-slate-800 text-slate-300'}`}>
                       {rec ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                     </button>
-                    <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder={rec ? `Recording ${sec}s/15s...` : 'संदेश लिखें...'} className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white" />
+                    <input type="text" value={text} onChange={(e) => setText(e.target.value)} placeholder={rec ? `Recording ${sec}s/15s...` : burnSeconds === 15 ? '🔥 15s Self-Destruct संदेश...' : 'संदेश लिखें...'} className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white" />
                     <button type="submit" disabled={sending || !text.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40">
                       {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                     </button>
