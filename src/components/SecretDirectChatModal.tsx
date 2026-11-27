@@ -745,3 +745,4 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
     </div>
   );
 };
+
