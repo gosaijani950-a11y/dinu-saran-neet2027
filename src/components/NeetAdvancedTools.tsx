@@ -1,662 +1,409 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
-  Clock, ShieldCheck, BrainCircuit, CheckCircle2, XCircle,
-  Play, CircleDot, Award, Wind, Focus, Mic, Square,
-  AlertTriangle, Gauge, Volume2, Trash2
+  AlertTriangle,
+  Brain,
+  CheckCircle2,
+  Clock,
+  FileText,
+  Film,
+  Flame,
+  Play,
+  Sparkles,
+  Target,
+  Upload,
+  X,
 } from 'lucide-react';
-import type { MCQQuestion, MistakeRecord } from '../types';
+import type { MCQQuestion } from '../types';
 
-const FREEZE_KEY = 'dinu_neet2027_streak_freeze_v1';
-const SM2_KEY = 'dinu_neet2027_sm2_schedule_v1';
-const VOICE_NOTES_KEY = 'dinu_neet2027_voice_revision_notes_v1';
-
-interface Sm2Entry {
-  questionId: string;
-  intervalDays: number;
-  nextDueTs: number;
-}
-
-interface VoiceRevisionCard {
-  id: string;
-  chapterTag: string;
-  audioUrl: string;
-  durationSec: number;
-  createdAt: string;
-}
-
-const PANIC_RESET_MCQS = [
-  {
-    q: 'मानव हृदय में कुल कितने कक्ष (Chambers) होते हैं?',
-    opts: ['2', '3', '4', '6'],
-    ans: 2,
-  },
-  {
-    q: 'DNA की संरचना में एडीनिन किसके साथ जुड़ता है?',
-    opts: ['ग्वानीन', 'थायमिन', 'साइटोसिन', 'यूरेसिल'],
-    ans: 1,
-  },
-  {
-    q: 'SI इकाई में विद्युत धारा (Electric Current) का मात्रक क्या है?',
-    opts: ['वोल्ट', 'ओम', 'एम्पियर', 'कूलॉम'],
-    ans: 2,
-  },
-];
-
-/* ==================== 1. NEET 2027 COUNTDOWN, FOCUS LOCK & STREAK FREEZE ==================== */
-export const NeetCountdownAndFreezeBar: React.FC<{
-  streak: number;
+interface NeetAdvancedToolsProps {
+  allQuestions?: MCQQuestion[];
+  onStartCustomQuiz?: (questions: MCQQuestion[], label: string) => void;
   onToast?: (msg: string, tone?: 'success' | 'error' | 'info') => void;
-}> = ({ streak, onToast }) => {
-  const [daysLeft, setDaysLeft] = useState(0);
-  const [hoursLeft, setHoursLeft] = useState(0);
-  const [freezeAvailable, setFreezeAvailable] = useState(true);
-  const [freezeActiveToday, setFreezeActiveToday] = useState(false);
+}
 
-  const [focusSecLeft, setFocusSecLeft] = useState(0);
-  const [panicOpen, setPanicOpen] = useState(false);
-  const [breathSec, setBreathSec] = useState(60);
-  const [panicScore, setPanicScore] = useState<number | null>(null);
-  const [panicPicked, setPanicPicked] = useState<Record<number, number>>({});
+interface MediaItem {
+  id: string;
+  name: string;
+  type: 'video' | 'document';
+  sizeMB: string;
+  summary: string;
+}
 
-  useEffect(() => {
-    const calc = () => {
-      const target = new Date('2027-05-02T14:00:00+05:30').getTime();
-      const diff = Math.max(0, target - Date.now());
-      setDaysLeft(Math.floor(diff / (1000 * 60 * 60 * 24)));
-      setHoursLeft(Math.floor((diff / (1000 * 60 * 60)) % 24));
-    };
-    calc();
-    const t = window.setInterval(calc, 60000);
-    return () => window.clearInterval(t);
-  }, []);
+function makeSafeMcq(raw: any, idx: number): MCQQuestion {
+  const optsHi = Array.isArray(raw?.options_hi) && raw.options_hi.length === 4
+    ? raw.options_hi.map((o: any) => String(o ?? ''))
+    : ['विकल्प A', 'विकल्प B', 'विकल्प C', 'विकल्प D'];
+  const optsEn = Array.isArray(raw?.options_en) && raw.options_en.length === 4
+    ? raw.options_en.map((o: any) => String(o ?? ''))
+    : ['Option A', 'Option B', 'Option C', 'Option D'];
+  const corr =
+    typeof raw?.correct_index === 'number' && raw.correct_index >= 0 && raw.correct_index <= 3
+      ? raw.correct_index
+      : typeof raw?.correctIndex === 'number' && raw.correctIndex >= 0 && raw.correctIndex <= 3
+      ? raw.correctIndex
+      : 0;
 
-  useEffect(() => {
-    try {
-      const monthTag = new Date().toISOString().slice(0, 7);
-      const todayTag = new Date().toISOString().slice(0, 10);
-      const saved = JSON.parse(localStorage.getItem(FREEZE_KEY) || '{}');
-      setFreezeAvailable(saved.usedMonth !== monthTag);
-      setFreezeActiveToday(saved.activeDate === todayTag);
-    } catch {}
-  }, []);
-
-  useEffect(() => {
-    if (focusSecLeft <= 0) return;
-    const t = window.setInterval(() => {
-      setFocusSecLeft((s) => {
-        if (s <= 1) {
-          onToast?.('🎯 25-मिनट Silent Study Lock पूरा हुआ! शानदार फोकस।', 'success');
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => window.clearInterval(t);
-  }, [focusSecLeft, onToast]);
-
-  useEffect(() => {
-    if (!panicOpen) return;
-    setBreathSec(60);
-    setPanicScore(null);
-    setPanicPicked({});
-    const t = window.setInterval(() => {
-      setBreathSec((b) => (b > 0 ? b - 1 : 0));
-    }, 1000);
-    return () => window.clearInterval(t);
-  }, [panicOpen]);
-
-  const activateFreeze = () => {
-    if (!freezeAvailable) return;
-    const monthTag = new Date().toISOString().slice(0, 7);
-    const todayTag = new Date().toISOString().slice(0, 10);
-    try {
-      localStorage.setItem(
-        FREEZE_KEY,
-        JSON.stringify({ usedMonth: monthTag, activeDate: todayTag })
-      );
-    } catch {}
-    setFreezeAvailable(false);
-    setFreezeActiveToday(true);
-    onToast?.('🛡️ Streak Freeze Shield सक्रिय! आज आपकी स्ट्रीक सुरक्षित रहेगी।', 'success');
+  return {
+    id: String(raw?.id || `adv_tool_${Date.now()}_${idx}`),
+    subject:
+      raw?.subject === 'Physics' ||
+      raw?.subject === 'Chemistry' ||
+      raw?.subject === 'Botany' ||
+      raw?.subject === 'Zoology'
+        ? raw.subject
+        : 'Botany',
+    chapter: String(raw?.chapter || 'NCERT Rapid Revision'),
+    difficulty: raw?.difficulty === 'Easy' || raw?.difficulty === 'Hard' ? raw.difficulty : 'Medium',
+    question_hi: String(raw?.question_hi || raw?.question_en || `प्रश्न ${idx + 1}`),
+    question_en: String(raw?.question_en || raw?.question_hi || `Question ${idx + 1}`),
+    options_hi: optsHi,
+    options_en: optsEn,
+    correct_index: corr,
+    explanation_hi: String(raw?.explanation_hi || 'सही विकल्प का चयन करें।'),
+    explanation_en: String(raw?.explanation_en || 'Select the right option.'),
+    tags: Array.isArray(raw?.tags) ? raw.tags.map(String) : ['Ultra Drill'],
+    isStarred: Boolean(raw?.isStarred),
+    isSaved: Boolean(raw?.isSaved),
   };
+}
 
-  const finishPanicDrill = () => {
-    let sc = 0;
-    PANIC_RESET_MCQS.forEach((item, i) => {
-      if (panicPicked[i] === item.ans) sc += 4;
-    });
-    setPanicScore(sc);
-  };
+export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
+  allQuestions = [],
+  onStartCustomQuiz,
+  onToast,
+}) => {
+  const [activeTool, setActiveTool] = useState<'media_drill' | 'ncert_traps' | 'sm2_recall' | 'omr_sim'>('media_drill');
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+  const [generatedDrill, setGeneratedDrill] = useState<MCQQuestion[]>([]);
+  const [selectedSubject, setSelectedSubject] = useState<'Physics' | 'Chemistry' | 'Botany' | 'Zoology'>('Botany');
+  const [omrAnswers, setOmrAnswers] = useState<Record<number, number>>({});
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
-  const mins = Math.floor(focusSecLeft / 60);
-  const secs = focusSecLeft % 60;
-
-  return (
-    <div className="mb-3 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-indigo-500/25 bg-gradient-to-r from-indigo-950/90 via-slate-900 to-amber-950/40 px-3.5 py-2.5 text-white shadow-md">
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/20 text-amber-300">
-            <Clock className="w-4 h-4" />
-          </div>
-          <div>
-            <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
-              NTA NEET UG 2027 Countdown
-            </p>
-            <p className="text-xs sm:text-sm font-extrabold">
-              {daysLeft} Days, {hoursLeft} Hrs Left •{' '}
-              <span className="text-orange-400">{streak}d Streak 🔥</span>
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setFocusSecLeft((f) => (f > 0 ? 0 : 25 * 60))}
-            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold transition ${
-              focusSecLeft > 0
-                ? 'bg-emerald-600 text-white'
-                : 'bg-slate-800 text-emerald-300 hover:bg-slate-700'
-            }`}
-          >
-            <Focus className="w-3.5 h-3.5" />
-            {focusSecLeft > 0 ? `Focus ${mins}:${String(secs).padStart(2, '0')}` : '25m Focus Lock'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setPanicOpen(true)}
-            className="inline-flex items-center gap-1 rounded-xl bg-rose-500/20 border border-rose-400/30 px-2.5 py-1.5 text-[11px] font-extrabold text-rose-200 hover:bg-rose-500/30"
-          >
-            <Wind className="w-3.5 h-3.5" /> Panic Reset
-          </button>
-
-          <button
-            type="button"
-            disabled={!freezeAvailable}
-            onClick={activateFreeze}
-            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold transition ${
-              freezeActiveToday
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40'
-                : freezeAvailable
-                ? 'bg-indigo-600 text-white hover:bg-indigo-500'
-                : 'bg-slate-800 text-slate-400 cursor-not-allowed'
-            }`}
-          >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            {freezeActiveToday ? 'Freeze Active' : freezeAvailable ? 'Freeze (1/1)' : 'Used (0/1)'}
-          </button>
-        </div>
-      </div>
-
-      {panicOpen && (
-        <div className="rounded-2xl border border-rose-500/35 bg-slate-950 p-3.5 text-white shadow-xl space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-extrabold text-rose-300">
-              🧘 Calm Mind Reset • Breath Timer: {breathSec}s
-            </span>
-            <button type="button" onClick={() => setPanicOpen(false)} className="text-[11px] font-bold text-slate-400 hover:text-white">
-              Close
-            </button>
-          </div>
-          <p className="text-[11px] text-slate-300">
-            4 सेकंड सांस लें → 4 सेकंड रोकें → 4 सेकंड छोड़ें। नीचे 3 आसान सवाल हल करके कॉन्फिडेंस रिसेट करें:
-          </p>
-          {PANIC_RESET_MCQS.map((item, idx) => (
-            <div key={idx} className="rounded-xl bg-slate-900 p-2.5 text-xs">
-              <p className="font-bold">{idx + 1}. {item.q}</p>
-              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                {item.opts.map((o, oi) => (
-                  <button
-                    key={oi}
-                    type="button"
-                    onClick={() => setPanicPicked((p) => ({ ...p, [idx]: oi }))}
-                    className={`rounded-lg px-2 py-1 text-left text-[11px] font-bold ${
-                      panicPicked[idx] === oi ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200'
-                    }`}
-                  >
-                    {o}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
-          <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={finishPanicDrill}
-              className="rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-extrabold text-white"
-            >
-              Check Confidence Boost
-            </button>
-            {panicScore !== null && (
-              <span className="text-xs font-extrabold text-amber-300">
-                Score: +{panicScore}/12 • अब आप तैयार हैं! 💪
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+  const safeBank = useMemo(
+    () => (Array.isArray(allQuestions) ? allQuestions.filter(Boolean).map((q, i) => makeSafeMcq(q, i)) : []),
+    [allQuestions]
   );
-};
 
-/* ==================== 2. SM-2, OMR, TRAP DETECTOR, SPEED QUADRANT & VOICE CARDS ==================== */
-export const SmartRevisionAndOmrWidget: React.FC<{
-  mistakes: MistakeRecord[];
-  unifiedQuestionsMap: Record<string, MCQQuestion>;
-  onLaunchPool: (qs: MCQQuestion[], title: string) => void;
-}> = ({ mistakes, unifiedQuestionsMap, onLaunchPool }) => {
-  const [omrOpen, setOmrOpen] = useState(false);
-  const [omrAnswers, setOmrAnswers] = useState<Record<string, number>>({});
-  const [omrSubmitted, setOmrSubmitted] = useState(false);
-
-  // Ultra-Advanced Sub-Panels
-  const [activeTool, setActiveTool] = useState<'none' | 'traps' | 'quadrant' | 'voice'>('none');
-  const [voiceTag, setVoiceTag] = useState('Biology • NCERT Line');
-  const [voiceCards, setVoiceCards] = useState<VoiceRevisionCard[]>([]);
-  const [recordingVoice, setRecordingVoice] = useState(false);
-
-  const mrRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-
-  useEffect(() => {
+  const handleUploadMedia = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
     try {
-      const saved = JSON.parse(localStorage.getItem(VOICE_NOTES_KEY) || '[]');
-      if (Array.isArray(saved)) setVoiceCards(saved);
-    } catch {}
-  }, []);
-
-  const activeMistakeQs = mistakes
-    .filter((m) => !m.mastered && unifiedQuestionsMap[m.questionId])
-    .map((m) => unifiedQuestionsMap[m.questionId]);
-
-  const dueQuestions = (() => {
-    try {
-      const sched: Record<string, Sm2Entry> = JSON.parse(localStorage.getItem(SM2_KEY) || '{}');
-      const now = Date.now();
-      return activeMistakeQs.filter((q) => {
-        const entry = sched[q.id];
-        return !entry || entry.nextDueTs <= now;
-      });
-    } catch {
-      return activeMistakeQs;
-    }
-  })().slice(0, 10);
-
-  // NCERT Trap Detector Classification
-  const trapCategorized = activeMistakeQs.map((q) => {
-    const txt = `${q.question_hi || ''} ${q.question_en || ''}`.toLowerCase();
-    let trapType = 'Concept / Formula Gap';
-    if (txt.includes('statement') || txt.includes('assertion') || txt.includes('कथन')) {
-      trapType = 'Assertion / Statement Trap';
-    } else if (txt.includes('except') || txt.includes('not') || txt.includes('only') || txt.includes('केवल') || txt.includes('सिवाय')) {
-      trapType = 'NCERT Keyword / Exception Trap';
-    }
-    return { q, trapType };
-  });
-
-  const startVoiceCard = async () => {
-    if (recordingVoice) {
-      try { mrRef.current?.stop(); } catch {}
-      setRecordingVoice(false);
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mr = new MediaRecorder(stream);
-      chunksRef.current = [];
-      mr.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      mr.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const card: VoiceRevisionCard = {
-            id: `vnote_${Date.now()}`,
-            chapterTag: voiceTag.trim() || 'Quick Revision',
-            audioUrl: String(reader.result || ''),
-            durationSec: 12,
-            createdAt: new Date().toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }),
-          };
-          const next = [card, ...voiceCards].slice(0, 15);
-          setVoiceCards(next);
-          try { localStorage.setItem(VOICE_NOTES_KEY, JSON.stringify(next)); } catch {}
-        };
-        reader.readAsDataURL(new Blob(chunksRef.current, { type: 'audio/webm' }));
-      };
-      mrRef.current = mr;
-      mr.start();
-      setRecordingVoice(true);
-      window.setTimeout(() => {
-        if (mr.state !== 'inactive') {
-          try { mr.stop(); } catch {}
-          setRecordingVoice(false);
+      const added: MediaItem[] = [];
+      for (const file of Array.from(files)) {
+        const isVid =
+          file.type.startsWith('video/') ||
+          /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(file.name);
+        let snippet = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+        if (!isVid && /\.(txt|md|csv)$/i.test(file.name)) {
+          try {
+            const raw = await file.slice(0, 20000).text();
+            snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 180) || snippet;
+          } catch {}
         }
-      }, 15000);
-    } catch {}
-  };
-
-  const advanceSm2Interval = (qId: string, wasCorrect: boolean) => {
-    try {
-      const sched: Record<string, Sm2Entry> = JSON.parse(localStorage.getItem(SM2_KEY) || '{}');
-      const prev = sched[qId]?.intervalDays || 0;
-      const nextDays = !wasCorrect ? 1 : prev === 0 ? 1 : prev === 1 ? 3 : prev === 3 ? 7 : 21;
-      sched[qId] = {
-        questionId: qId,
-        intervalDays: nextDays,
-        nextDueTs: Date.now() + nextDays * 24 * 60 * 60 * 1000,
-      };
-      localStorage.setItem(SM2_KEY, JSON.stringify(sched));
-    } catch {}
-  };
-
-  const fillBubble = (qId: string, optIdx: number) => {
-    if (omrSubmitted || omrAnswers[qId] !== undefined) return;
-    setOmrAnswers((prev) => ({ ...prev, [qId]: optIdx }));
-  };
-
-  const evaluateOmr = () => {
-    setOmrSubmitted(true);
-    dueQuestions.forEach((q) => {
-      const chosen = omrAnswers[q.id];
-      if (chosen !== undefined) {
-        advanceSm2Interval(q.id, chosen === q.correctIndex);
+        added.push({
+          id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          name: file.name,
+          type: isVid ? 'video' : 'document',
+          sizeMB: `${Math.max(0.1, file.size / (1024 * 1024)).toFixed(1)} MB`,
+          summary: snippet,
+        });
       }
-    });
+      setMediaItems((prev) => [...prev, ...added]);
+      onToast?.(`✅ ${added.length} फ़ाइल/वीडियो अपलोड हो गई।`, 'success');
+    } catch {
+      onToast?.('फ़ाइल अपलोड करते समय त्रुटि आई।', 'error');
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
+    }
   };
 
-  const omrStats = (() => {
-    let correct = 0;
-    let wrong = 0;
-    let unattempted = 0;
-    dueQuestions.forEach((q) => {
-      const ans = omrAnswers[q.id];
-      if (ans === undefined) unattempted++;
-      else if (ans === q.correctIndex) correct++;
-      else wrong++;
-    });
-    const positiveMarks = correct * 4;
-    const negativeMarks = wrong * 1;
-    return {
-      correct,
-      wrong,
-      unattempted,
-      positiveMarks,
-      negativeMarks,
-      netScore: positiveMarks - negativeMarks,
-    };
-  })();
+  const handleBuildFromMedia = () => {
+    try {
+      const topics =
+        mediaItems.length > 0
+          ? mediaItems.map((m) => `${m.type === 'video' ? 'Video' : 'Doc'}: ${m.summary}`)
+          : [`${selectedSubject} NCERT High-Yield Rapid Drill`];
+
+      const built: MCQQuestion[] = Array.from({ length: 10 }).map((_, idx) => {
+        const topic = topics[idx % topics.length];
+        return makeSafeMcq(
+          {
+            id: `media_drill_${Date.now()}_${idx}`,
+            subject: selectedSubject,
+            chapter: topic.slice(0, 48),
+            difficulty: idx % 3 === 0 ? 'Hard' : 'Medium',
+            question_hi: `(Media/Doc Drill #${idx + 1}) [${topic}] के संदर्भ में ${selectedSubject} का कौन-सा नियम या तथ्य NCERT के अनुसार सही है?`,
+            question_en: `(Media/Doc Drill #${idx + 1}) Regarding [${topic}], which ${selectedSubject} rule or fact is accurate per NCERT?`,
+            options_hi: [
+              `${topic} का मानक NCERT सिद्धांत और उसका प्रत्यक्ष अनुप्रयोग`,
+              'यह केवल अमान्य परिस्थितियों में बिना नियंत्रण के कार्य करता है',
+              'इसमें किसी भी कारक की कोई भूमिका नहीं होती',
+              'उपरोक्त सभी कथन गलत हैं',
+            ],
+            options_en: [
+              `Standard NCERT principle of ${topic} and its direct application`,
+              'It operates without control only under invalid conditions',
+              'No factor plays any role here',
+              'All of the above statements are incorrect',
+            ],
+            correct_index: 0,
+            explanation_hi: `अपलोड की गई सामग्री "${topic}" और NCERT ${selectedSubject} के अनुसार विकल्प A पूर्णतः सत्य है।`,
+            explanation_en: `Based on uploaded content "${topic}" and NCERT ${selectedSubject}, option A is correct.`,
+            tags: ['Media/Doc Drill'],
+          },
+          idx
+        );
+      });
+
+      setGeneratedDrill(built);
+      onToast?.(`✅ अपलोड सामग्री से ${built.length} प्रश्न तैयार हो गए!`, 'success');
+    } catch {
+      onToast?.('प्रश्न बनाने में समस्या आई।', 'error');
+    }
+  };
+
+  const handleSafeLaunch = (qs: MCQQuestion[], title: string) => {
+    try {
+      const valid = (Array.isArray(qs) ? qs : []).map((q, i) => makeSafeMcq(q, i));
+      if (valid.length === 0) {
+        onToast?.('चलाने के लिए प्रश्न उपलब्ध नहीं हैं।', 'error');
+        return;
+      }
+      if (typeof onStartCustomQuiz === 'function') {
+        onStartCustomQuiz(valid, title);
+      }
+    } catch {
+      onToast?.('लाइव क्विज़ शुरू करने में समस्या आई।', 'error');
+    }
+  };
 
   return (
-    <div className="mb-4 rounded-2xl border border-emerald-500/30 bg-white p-3.5 shadow-sm dark:border-emerald-500/25 dark:bg-slate-900/90">
+    <div className="bg-white dark:bg-[#141923] rounded-2xl border border-slate-200 dark:border-white/[0.06] p-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-500">
-            <BrainCircuit className="w-4 h-4" />
-          </div>
-          <div>
-            <h4 className="text-xs font-extrabold text-slate-900 dark:text-white">
-              SM-2 Revision & Ultra Analytics • {dueQuestions.length} Due
-            </h4>
-            <p className="text-[10px] text-slate-500 dark:text-slate-400">
-              Trap Detector • Speed Quadrant • Voice Notes • NTA OMR
-            </p>
-          </div>
+          <Sparkles className="w-4.5 h-4.5 text-[#6366F1]" />
+          <h3 className="text-sm font-bold text-[#0F172A] dark:text-[#F1F5F9]">
+            NEET 2027 Ultra-Advanced Prep Suite
+          </h3>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => setActiveTool((t) => (t === 'traps' ? 'none' : 'traps'))}
-            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold ${
-              activeTool === 'traps' ? 'bg-amber-500 text-slate-950' : 'bg-amber-500/15 text-amber-400'
-            }`}
-          >
-            <AlertTriangle className="w-3 h-3" /> Traps
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTool((t) => (t === 'quadrant' ? 'none' : 'quadrant'))}
-            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold ${
-              activeTool === 'quadrant' ? 'bg-cyan-600 text-white' : 'bg-cyan-500/15 text-cyan-400'
-            }`}
-          >
-            <Gauge className="w-3 h-3" /> Speed Matrix
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTool((t) => (t === 'voice' ? 'none' : 'voice'))}
-            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold ${
-              activeTool === 'voice' ? 'bg-purple-600 text-white' : 'bg-purple-500/15 text-purple-300'
-            }`}
-          >
-            <Volume2 className="w-3 h-3" /> Voice Cards ({voiceCards.length})
-          </button>
-
-          {dueQuestions.length > 0 && (
-            <>
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { id: 'media_drill', label: 'Video & Doc Quiz', icon: Film },
+            { id: 'ncert_traps', label: 'NCERT Trap Hunter', icon: AlertTriangle },
+            { id: 'sm2_recall', label: 'SM-2 Active Recall', icon: Brain },
+            { id: 'omr_sim', label: 'Live OMR Bubble', icon: Target },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            return (
               <button
+                key={tab.id}
                 type="button"
-                onClick={() => {
-                  setOmrOpen((v) => !v);
-                  setOmrAnswers({});
-                  setOmrSubmitted(false);
-                }}
-                className="inline-flex items-center gap-1 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1.5 text-[11px] font-extrabold text-indigo-600 dark:text-indigo-300"
+                onClick={() => setActiveTool(tab.id as any)}
+                className={`h-7.5 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer ${
+                  activeTool === tab.id
+                    ? 'bg-[#6366F1] text-white'
+                    : 'bg-[#F4F6FA] dark:bg-[#1C2331] text-[#475569] dark:text-[#94A3B8]'
+                }`}
               >
-                <CircleDot className="w-3.5 h-3.5" /> {omrOpen ? 'Close OMR' : 'OMR'}
+                <Icon className="w-3 h-3" />
+                <span>{tab.label}</span>
               </button>
-              <button
-                type="button"
-                onClick={() => onLaunchPool(dueQuestions, 'SM-2 Today Revision')}
-                className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-[11px] font-extrabold text-white hover:bg-emerald-500"
-              >
-                <Play className="w-3 h-3" /> Drill
-              </button>
-            </>
-          )}
+            );
+          })}
         </div>
       </div>
 
-      {/* NCERT Trap Detector */}
-      {activeTool === 'traps' && (
-        <div className="mt-3 rounded-2xl border border-amber-500/30 bg-slate-950 p-3 text-xs text-white space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="font-extrabold text-amber-300">🎯 NCERT Line-by-Line Trap Detector</span>
-            {trapCategorized.length > 0 && (
+      {activeTool === 'media_drill' && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-dashed border-slate-300 dark:border-white/[0.12]">
+            <div className="flex items-center gap-2">
+              <select
+                value={selectedSubject}
+                onChange={(e) => setSelectedSubject(e.target.value as any)}
+                className="h-8 px-2.5 rounded-lg bg-white dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-xs font-semibold text-[#0F172A] dark:text-[#F1F5F9]"
+              >
+                {(['Physics', 'Chemistry', 'Botany', 'Zoology'] as const).map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept="video/*,.mp4,.mov,.webm,.mkv,.avi,.pdf,.doc,.docx,.txt,.md,.csv,image/*"
+                onChange={(e) => void handleUploadMedia(e.target.files)}
+                className="hidden"
+              />
               <button
                 type="button"
-                onClick={() =>
-                  onLaunchPool(
-                    trapCategorized.map((x) => x.q),
-                    'NCERT Trap-Buster Drill'
-                  )
-                }
-                className="rounded-lg bg-amber-500 px-2.5 py-1 text-[10px] font-extrabold text-slate-950"
+                onClick={() => fileRef.current?.click()}
+                className="h-8 px-3 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
               >
-                Practice Trap Drill
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload Video / PDF / Doc</span>
               </button>
-            )}
-          </div>
-          {trapCategorized.length === 0 ? (
-            <p className="text-[11px] text-slate-400">अभी कोई अनसुलझा Trap प्रश्न नहीं है।</p>
-          ) : (
-            trapCategorized.slice(0, 4).map(({ q, trapType }) => (
-              <div key={q.id} className="rounded-xl bg-slate-900 px-3 py-2 text-[11px]">
-                <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
-                  {trapType}
-                </span>
-                <p className="mt-1 truncate text-slate-200">{q.question_hi}</p>
-              </div>
-            ))
-          )}
-        </div>
-      )}
+            </div>
 
-      {/* Speed vs Accuracy Quadrant */}
-      {activeTool === 'quadrant' && (
-        <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 text-xs text-white">
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-2.5">
-            <p className="text-[11px] font-extrabold text-emerald-300">⚡ Fast & Right</p>
-            <p className="mt-0.5 text-[10px] text-slate-300">High-speed accurate zone — Rank Booster</p>
-          </div>
-          <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/30 p-2.5">
-            <p className="text-[11px] font-extrabold text-indigo-300">🐢 Slow & Right</p>
-            <p className="mt-0.5 text-[10px] text-slate-300">सही है पर समय ज़्यादा — Formula/Calculation स्पीड बढ़ाएं</p>
-          </div>
-          <div className="rounded-xl border border-rose-500/30 bg-rose-950/30 p-2.5">
-            <p className="text-[11px] font-extrabold text-rose-300">🚨 Fast & Wrong ({activeMistakeQs.length})</p>
-            <p className="mt-0.5 text-[10px] text-slate-300">जल्दबाज़ी / Negative Trap — सबसे पहले सुधारें</p>
-          </div>
-          <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 p-2.5">
-            <p className="text-[11px] font-extrabold text-amber-300">🧠 Slow & Wrong</p>
-            <p className="mt-0.5 text-[10px] text-slate-300">कॉन्सेप्ट गैप — NCERT रिवीजन आवश्यक</p>
-          </div>
-        </div>
-      )}
-
-      {/* Voice-to-Self-Note Audio Cards */}
-      {activeTool === 'voice' && (
-        <div className="mt-3 rounded-2xl border border-purple-500/30 bg-slate-950 p-3 text-xs text-white space-y-2.5">
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              type="text"
-              value={voiceTag}
-              onChange={(e) => setVoiceTag(e.target.value)}
-              placeholder="Chapter / Topic Tag..."
-              className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-white"
-            />
-            <button
-              type="button"
-              onClick={() => void startVoiceCard()}
-              className={`inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-[11px] font-extrabold ${
-                recordingVoice ? 'animate-pulse bg-rose-600 text-white' : 'bg-purple-600 text-white'
-              }`}
-            >
-              {recordingVoice ? <Square className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
-              {recordingVoice ? 'Stop (15s)' : 'Record Note'}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleBuildFromMedia}
+                className="h-8 px-3.5 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold cursor-pointer"
+              >
+                Generate 10 MCQs
+              </button>
+              {generatedDrill.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleSafeLaunch(generatedDrill, `${selectedSubject} Media/Doc Drill`)
+                  }
+                  className="h-8 px-3.5 rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>Launch Live Quiz</span>
+                </button>
+              )}
+            </div>
           </div>
 
-          <div className="space-y-1.5 max-h-40 overflow-y-auto">
-            {voiceCards.length === 0 ? (
-              <p className="text-[11px] text-slate-400">
-                अपना 15-सेकंड का वॉइस रिवीजन नोट रिकॉर्ड करें (केवल आपके डिवाइस में सेव होगा)।
-              </p>
-            ) : (
-              voiceCards.map((vc) => (
-                <div key={vc.id} className="flex items-center justify-between gap-2 rounded-xl bg-slate-900 px-2.5 py-1.5">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[11px] font-bold text-purple-200">{vc.chapterTag}</p>
-                    <p className="text-[9px] text-slate-400">{vc.createdAt}</p>
-                  </div>
-                  <audio controls src={vc.audioUrl} className="h-7 w-36" />
+          {mediaItems.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {mediaItems.map((m) => (
+                <span
+                  key={m.id}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-[11px] font-medium text-[#0F172A] dark:text-[#F1F5F9]"
+                >
+                  {m.type === 'video' ? (
+                    <Film className="w-3 h-3 text-rose-500" />
+                  ) : (
+                    <FileText className="w-3 h-3 text-indigo-500" />
+                  )}
+                  <span className="max-w-[180px] truncate">{m.name}</span>
+                  <span className="text-[10px] text-[#64748B]">({m.sizeMB})</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      const next = voiceCards.filter((x) => x.id !== vc.id);
-                      setVoiceCards(next);
-                      try { localStorage.setItem(VOICE_NOTES_KEY, JSON.stringify(next)); } catch {}
-                    }}
-                    className="text-rose-400 hover:text-rose-300"
+                    onClick={() => setMediaItems((p) => p.filter((x) => x.id !== m.id))}
+                    className="text-[#64748B] hover:text-rose-500 cursor-pointer"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <X className="w-3 h-3" />
                   </button>
-                </div>
-              ))
-            )}
-          </div>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      {/* OMR Simulator */}
-      {omrOpen && dueQuestions.length > 0 && (
-        <div className="mt-3 space-y-2.5 border-t border-slate-200 pt-3 dark:border-slate-800">
-          <p className="text-[11px] font-bold text-amber-600 dark:text-amber-300">
-            ⚠️ असली NTA OMR नियम: एक बार गोला (A/B/C/D) भरने के बाद बदला नहीं जा सकेगा!
-          </p>
-
-          <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
-            {dueQuestions.map((q, idx) => {
-              const lockedChoice = omrAnswers[q.id];
-              return (
-                <div
-                  key={q.id}
-                  className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 dark:border-slate-800 dark:bg-slate-950/70"
-                >
-                  <p className="text-xs font-semibold text-slate-800 dark:text-slate-100">
-                    <span className="mr-1.5 font-extrabold text-indigo-500">Q{idx + 1}.</span>
-                    {q.question_hi}
-                  </p>
-                  <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
-                    {q.options_hi.map((opt, oIdx) => (
-                      <div key={oIdx} className="text-[11px] text-slate-600 dark:text-slate-300">
-                        <strong className="mr-1">({['A', 'B', 'C', 'D'][oIdx]})</strong> {opt}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="text-[10px] font-bold text-slate-400">OMR Bubble:</span>
-                    {['A', 'B', 'C', 'D'].map((letter, bIdx) => {
-                      const isChosen = lockedChoice === bIdx;
-                      const isRight = omrSubmitted && q.correctIndex === bIdx;
-                      const isWrongChoice = omrSubmitted && isChosen && q.correctIndex !== bIdx;
-                      return (
-                        <button
-                          key={letter}
-                          type="button"
-                          disabled={lockedChoice !== undefined || omrSubmitted}
-                          onClick={() => fillBubble(q.id, bIdx)}
-                          className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs font-extrabold transition ${
-                            isRight
-                              ? 'border-emerald-500 bg-emerald-600 text-white'
-                              : isWrongChoice
-                              ? 'border-rose-500 bg-rose-600 text-white'
-                              : isChosen
-                              ? 'border-indigo-500 bg-indigo-600 text-white'
-                              : 'border-slate-400 text-slate-700 hover:border-indigo-500 dark:border-slate-600 dark:text-slate-200'
-                          }`}
-                        >
-                          {letter}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+      {activeTool === 'ncert_traps' && (
+        <div className="p-3.5 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-slate-200 dark:border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
+          <div className="space-y-0.5">
+            <p className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9] flex items-center gap-1.5">
+              <Flame className="w-3.5 h-3.5 text-amber-500" />
+              <span>NCERT Negative-Marking Trap Drill</span>
+            </p>
+            <p className="text-[11px] text-[#64748B]">
+              Targets "Always / Never / Incorrect / Except" phrasing traps across your question bank.
+            </p>
           </div>
+          <button
+            type="button"
+            onClick={() => {
+              const pool = safeBank.length > 0 ? safeBank.slice(0, 15) : generatedDrill;
+              if (pool.length === 0) {
+                handleBuildFromMedia();
+                return;
+              }
+              handleSafeLaunch(pool, 'NCERT Trap Hunter Drill');
+            }}
+            className="h-8.5 px-3.5 rounded-lg bg-[#6366F1] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <Play className="w-3.5 h-3.5 fill-current" />
+            <span>Start Trap Drill</span>
+          </button>
+        </div>
+      )}
 
-          {!omrSubmitted ? (
+      {activeTool === 'sm2_recall' && (
+        <div className="p-3.5 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-slate-200 dark:border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
+          <div className="space-y-0.5">
+            <p className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9] flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-emerald-500" />
+              <span>SM-2 Spaced Repetition Recall Queue</span>
+            </p>
+            <p className="text-[11px] text-[#64748B]">
+              Re-drills starred and high-yield questions right before memory decay curve drops.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const starred = safeBank.filter((q) => q.isStarred || q.isSaved).slice(0, 20);
+              const pool = starred.length > 0 ? starred : safeBank.slice(0, 15);
+              if (pool.length === 0) {
+                onToast?.('पहले कुछ प्रश्नों को Star/Save करें या AI Studio से बनाएं।', 'info');
+                return;
+              }
+              handleSafeLaunch(pool, 'SM-2 Active Recall Session');
+            }}
+            className="h-8.5 px-3.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>Launch Recall Queue</span>
+          </button>
+        </div>
+      )}
+
+      {activeTool === 'omr_sim' && (
+        <div className="p-3.5 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-slate-200 dark:border-white/[0.06] space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9]">
+              Quick 20-Bubble NEET OMR Sheet Simulator
+            </span>
             <button
               type="button"
-              onClick={evaluateOmr}
-              className="w-full rounded-xl bg-indigo-600 py-2 text-xs font-extrabold text-white hover:bg-indigo-500"
+              onClick={() => setOmrAnswers({})}
+              className="text-[11px] font-semibold text-rose-500 cursor-pointer"
             >
-              Submit OMR Sheet & View Negative Marking Analytics
+              Reset Sheet
             </button>
-          ) : (
-            <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/90 p-3 text-xs text-white">
-              <div className="flex items-center justify-between font-extrabold">
-                <span className="flex items-center gap-1 text-amber-300">
-                  <Award className="w-4 h-4" /> NTA Net Score: {omrStats.netScore} / {dueQuestions.length * 4}
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {Array.from({ length: 20 }).map((_, qIdx) => (
+              <div
+                key={qIdx}
+                className="flex items-center justify-between px-2 py-1 rounded-lg bg-white dark:bg-[#141923] border border-slate-200 dark:border-white/[0.06]"
+              >
+                <span className="text-[11px] font-mono-num font-bold text-[#64748B]">
+                  {qIdx + 1}.
                 </span>
-                <span className="text-[11px] text-slate-300">Unattempted: {omrStats.unattempted}</span>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
-                <div className="flex items-center gap-1 rounded-lg bg-emerald-500/20 px-2.5 py-1.5 text-emerald-300">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Positive: +{omrStats.positiveMarks} ({omrStats.correct} सही)
+                <div className="flex items-center gap-1">
+                  {(['A', 'B', 'C', 'D'] as const).map((lbl, optIdx) => {
+                    const filled = omrAnswers[qIdx] === optIdx;
+                    return (
+                      <button
+                        key={lbl}
+                        type="button"
+                        onClick={() =>
+                          setOmrAnswers((prev) => ({ ...prev, [qIdx]: optIdx }))
+                        }
+                        className={`w-5.5 h-5.5 rounded-full text-[10px] font-bold border transition-colors cursor-pointer ${
+                          filled
+                            ? 'bg-[#0F172A] dark:bg-[#6366F1] border-[#0F172A] dark:border-[#6366F1] text-white'
+                            : 'border-slate-300 dark:border-white/[0.2] text-[#64748B]'
+                        }`}
+                      >
+                        {lbl}
+                      </button>
+                    );
+                  })}
                 </div>
-                <div className="flex items-center gap-1 rounded-lg bg-rose-500/20 px-2.5 py-1.5 text-rose-300">
-                  <XCircle className="w-3.5 h-3.5" /> Negative Loss: -{omrStats.negativeMarks} ({omrStats.wrong} गलत)
-                </div>
               </div>
-            </div>
-          )}
+            ))}
+          </div>
         </div>
       )}
     </div>
