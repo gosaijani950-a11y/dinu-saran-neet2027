@@ -1,17 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Clock, ShieldCheck, BrainCircuit, CheckCircle2, XCircle,
-  Play, CircleDot, Award, Wind, Focus
+  Play, CircleDot, Award, Wind, Focus, Mic, Square,
+  AlertTriangle, Gauge, Volume2, Trash2
 } from 'lucide-react';
 import type { MCQQuestion, MistakeRecord } from '../types';
 
 const FREEZE_KEY = 'dinu_neet2027_streak_freeze_v1';
 const SM2_KEY = 'dinu_neet2027_sm2_schedule_v1';
+const VOICE_NOTES_KEY = 'dinu_neet2027_voice_revision_notes_v1';
 
 interface Sm2Entry {
   questionId: string;
   intervalDays: number;
   nextDueTs: number;
+}
+
+interface VoiceRevisionCard {
+  id: string;
+  chapterTag: string;
+  audioUrl: string;
+  durationSec: number;
+  createdAt: string;
 }
 
 const PANIC_RESET_MCQS = [
@@ -42,10 +52,7 @@ export const NeetCountdownAndFreezeBar: React.FC<{
   const [freezeAvailable, setFreezeAvailable] = useState(true);
   const [freezeActiveToday, setFreezeActiveToday] = useState(false);
 
-  // Silent Study Lock (25m Focus Timer)
   const [focusSecLeft, setFocusSecLeft] = useState(0);
-
-  // Exam-Pressure Panic Reset Modal
   const [panicOpen, setPanicOpen] = useState(false);
   const [breathSec, setBreathSec] = useState(60);
   const [panicScore, setPanicScore] = useState<number | null>(null);
@@ -182,7 +189,6 @@ export const NeetCountdownAndFreezeBar: React.FC<{
         </div>
       </div>
 
-      {/* Exam-Pressure Panic Reset Drawer */}
       {panicOpen && (
         <div className="rounded-2xl border border-rose-500/35 bg-slate-950 p-3.5 text-white shadow-xl space-y-2.5">
           <div className="flex items-center justify-between">
@@ -235,7 +241,7 @@ export const NeetCountdownAndFreezeBar: React.FC<{
   );
 };
 
-/* ==================== 2. SM-2 SPACED REPETITION & NTA OMR SIMULATOR ==================== */
+/* ==================== 2. SM-2, OMR, TRAP DETECTOR, SPEED QUADRANT & VOICE CARDS ==================== */
 export const SmartRevisionAndOmrWidget: React.FC<{
   mistakes: MistakeRecord[];
   unifiedQuestionsMap: Record<string, MCQQuestion>;
@@ -244,6 +250,22 @@ export const SmartRevisionAndOmrWidget: React.FC<{
   const [omrOpen, setOmrOpen] = useState(false);
   const [omrAnswers, setOmrAnswers] = useState<Record<string, number>>({});
   const [omrSubmitted, setOmrSubmitted] = useState(false);
+
+  // Ultra-Advanced Sub-Panels
+  const [activeTool, setActiveTool] = useState<'none' | 'traps' | 'quadrant' | 'voice'>('none');
+  const [voiceTag, setVoiceTag] = useState('Biology • NCERT Line');
+  const [voiceCards, setVoiceCards] = useState<VoiceRevisionCard[]>([]);
+  const [recordingVoice, setRecordingVoice] = useState(false);
+
+  const mrRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(VOICE_NOTES_KEY) || '[]');
+      if (Array.isArray(saved)) setVoiceCards(saved);
+    } catch {}
+  }, []);
 
   const activeMistakeQs = mistakes
     .filter((m) => !m.mastered && unifiedQuestionsMap[m.questionId])
@@ -261,6 +283,60 @@ export const SmartRevisionAndOmrWidget: React.FC<{
       return activeMistakeQs;
     }
   })().slice(0, 10);
+
+  // NCERT Trap Detector Classification
+  const trapCategorized = activeMistakeQs.map((q) => {
+    const txt = `${q.question_hi || ''} ${q.question_en || ''}`.toLowerCase();
+    let trapType = 'Concept / Formula Gap';
+    if (txt.includes('statement') || txt.includes('assertion') || txt.includes('कथन')) {
+      trapType = 'Assertion / Statement Trap';
+    } else if (txt.includes('except') || txt.includes('not') || txt.includes('only') || txt.includes('केवल') || txt.includes('सिवाय')) {
+      trapType = 'NCERT Keyword / Exception Trap';
+    }
+    return { q, trapType };
+  });
+
+  const startVoiceCard = async () => {
+    if (recordingVoice) {
+      try { mrRef.current?.stop(); } catch {}
+      setRecordingVoice(false);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mr = new MediaRecorder(stream);
+      chunksRef.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const card: VoiceRevisionCard = {
+            id: `vnote_${Date.now()}`,
+            chapterTag: voiceTag.trim() || 'Quick Revision',
+            audioUrl: String(reader.result || ''),
+            durationSec: 12,
+            createdAt: new Date().toLocaleTimeString('hi-IN', { hour: '2-digit', minute: '2-digit' }),
+          };
+          const next = [card, ...voiceCards].slice(0, 15);
+          setVoiceCards(next);
+          try { localStorage.setItem(VOICE_NOTES_KEY, JSON.stringify(next)); } catch {}
+        };
+        reader.readAsDataURL(new Blob(chunksRef.current, { type: 'audio/webm' }));
+      };
+      mrRef.current = mr;
+      mr.start();
+      setRecordingVoice(true);
+      window.setTimeout(() => {
+        if (mr.state !== 'inactive') {
+          try { mr.stop(); } catch {}
+          setRecordingVoice(false);
+        }
+      }, 15000);
+    } catch {}
+  };
 
   const advanceSm2Interval = (qId: string, wasCorrect: boolean) => {
     try {
@@ -313,8 +389,6 @@ export const SmartRevisionAndOmrWidget: React.FC<{
     };
   })();
 
-  if (dueQuestions.length === 0) return null;
-
   return (
     <div className="mb-4 rounded-2xl border border-emerald-500/30 bg-white p-3.5 shadow-sm dark:border-emerald-500/25 dark:bg-slate-900/90">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -324,37 +398,183 @@ export const SmartRevisionAndOmrWidget: React.FC<{
           </div>
           <div>
             <h4 className="text-xs font-extrabold text-slate-900 dark:text-white">
-              SM-2 Smart Revision • {dueQuestions.length} Due Today
+              SM-2 Revision & Ultra Analytics • {dueQuestions.length} Due
             </h4>
             <p className="text-[10px] text-slate-500 dark:text-slate-400">
-              1d → 3d → 7d → 21d वैज्ञानिक अंतराल पर गलत प्रश्नों का दोहराव
+              Trap Detector • Speed Quadrant • Voice Notes • NTA OMR
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            onClick={() => {
-              setOmrOpen((v) => !v);
-              setOmrAnswers({});
-              setOmrSubmitted(false);
-            }}
-            className="inline-flex items-center gap-1 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1.5 text-[11px] font-extrabold text-indigo-600 dark:text-indigo-300"
+            onClick={() => setActiveTool((t) => (t === 'traps' ? 'none' : 'traps'))}
+            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold ${
+              activeTool === 'traps' ? 'bg-amber-500 text-slate-950' : 'bg-amber-500/15 text-amber-400'
+            }`}
           >
-            <CircleDot className="w-3.5 h-3.5" /> {omrOpen ? 'Close OMR' : 'NTA OMR Mode'}
+            <AlertTriangle className="w-3 h-3" /> Traps
           </button>
+
           <button
             type="button"
-            onClick={() => onLaunchPool(dueQuestions, 'SM-2 Today Revision')}
-            className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-[11px] font-extrabold text-white hover:bg-emerald-500"
+            onClick={() => setActiveTool((t) => (t === 'quadrant' ? 'none' : 'quadrant'))}
+            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold ${
+              activeTool === 'quadrant' ? 'bg-cyan-600 text-white' : 'bg-cyan-500/15 text-cyan-400'
+            }`}
           >
-            <Play className="w-3 h-3" /> Start Drill
+            <Gauge className="w-3 h-3" /> Speed Matrix
           </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTool((t) => (t === 'voice' ? 'none' : 'voice'))}
+            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold ${
+              activeTool === 'voice' ? 'bg-purple-600 text-white' : 'bg-purple-500/15 text-purple-300'
+            }`}
+          >
+            <Volume2 className="w-3 h-3" /> Voice Cards ({voiceCards.length})
+          </button>
+
+          {dueQuestions.length > 0 && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setOmrOpen((v) => !v);
+                  setOmrAnswers({});
+                  setOmrSubmitted(false);
+                }}
+                className="inline-flex items-center gap-1 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1.5 text-[11px] font-extrabold text-indigo-600 dark:text-indigo-300"
+              >
+                <CircleDot className="w-3.5 h-3.5" /> {omrOpen ? 'Close OMR' : 'OMR'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onLaunchPool(dueQuestions, 'SM-2 Today Revision')}
+                className="inline-flex items-center gap-1 rounded-xl bg-emerald-600 px-3 py-1.5 text-[11px] font-extrabold text-white hover:bg-emerald-500"
+              >
+                <Play className="w-3 h-3" /> Drill
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {omrOpen && (
+      {/* NCERT Trap Detector */}
+      {activeTool === 'traps' && (
+        <div className="mt-3 rounded-2xl border border-amber-500/30 bg-slate-950 p-3 text-xs text-white space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-extrabold text-amber-300">🎯 NCERT Line-by-Line Trap Detector</span>
+            {trapCategorized.length > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  onLaunchPool(
+                    trapCategorized.map((x) => x.q),
+                    'NCERT Trap-Buster Drill'
+                  )
+                }
+                className="rounded-lg bg-amber-500 px-2.5 py-1 text-[10px] font-extrabold text-slate-950"
+              >
+                Practice Trap Drill
+              </button>
+            )}
+          </div>
+          {trapCategorized.length === 0 ? (
+            <p className="text-[11px] text-slate-400">अभी कोई अनसुलझा Trap प्रश्न नहीं है।</p>
+          ) : (
+            trapCategorized.slice(0, 4).map(({ q, trapType }) => (
+              <div key={q.id} className="rounded-xl bg-slate-900 px-3 py-2 text-[11px]">
+                <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">
+                  {trapType}
+                </span>
+                <p className="mt-1 truncate text-slate-200">{q.question_hi}</p>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* Speed vs Accuracy Quadrant */}
+      {activeTool === 'quadrant' && (
+        <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl border border-cyan-500/30 bg-slate-950 p-3 text-xs text-white">
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-2.5">
+            <p className="text-[11px] font-extrabold text-emerald-300">⚡ Fast & Right</p>
+            <p className="mt-0.5 text-[10px] text-slate-300">High-speed accurate zone — Rank Booster</p>
+          </div>
+          <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/30 p-2.5">
+            <p className="text-[11px] font-extrabold text-indigo-300">🐢 Slow & Right</p>
+            <p className="mt-0.5 text-[10px] text-slate-300">सही है पर समय ज़्यादा — Formula/Calculation स्पीड बढ़ाएं</p>
+          </div>
+          <div className="rounded-xl border border-rose-500/30 bg-rose-950/30 p-2.5">
+            <p className="text-[11px] font-extrabold text-rose-300">🚨 Fast & Wrong ({activeMistakeQs.length})</p>
+            <p className="mt-0.5 text-[10px] text-slate-300">जल्दबाज़ी / Negative Trap — सबसे पहले सुधारें</p>
+          </div>
+          <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 p-2.5">
+            <p className="text-[11px] font-extrabold text-amber-300">🧠 Slow & Wrong</p>
+            <p className="mt-0.5 text-[10px] text-slate-300">कॉन्सेप्ट गैप — NCERT रिवीजन आवश्यक</p>
+          </div>
+        </div>
+      )}
+
+      {/* Voice-to-Self-Note Audio Cards */}
+      {activeTool === 'voice' && (
+        <div className="mt-3 rounded-2xl border border-purple-500/30 bg-slate-950 p-3 text-xs text-white space-y-2.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={voiceTag}
+              onChange={(e) => setVoiceTag(e.target.value)}
+              placeholder="Chapter / Topic Tag..."
+              className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-[11px] text-white"
+            />
+            <button
+              type="button"
+              onClick={() => void startVoiceCard()}
+              className={`inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-[11px] font-extrabold ${
+                recordingVoice ? 'animate-pulse bg-rose-600 text-white' : 'bg-purple-600 text-white'
+              }`}
+            >
+              {recordingVoice ? <Square className="w-3 h-3" /> : <Mic className="w-3 h-3" />}
+              {recordingVoice ? 'Stop (15s)' : 'Record Note'}
+            </button>
+          </div>
+
+          <div className="space-y-1.5 max-h-40 overflow-y-auto">
+            {voiceCards.length === 0 ? (
+              <p className="text-[11px] text-slate-400">
+                अपना 15-सेकंड का वॉइस रिवीजन नोट रिकॉर्ड करें (केवल आपके डिवाइस में सेव होगा)।
+              </p>
+            ) : (
+              voiceCards.map((vc) => (
+                <div key={vc.id} className="flex items-center justify-between gap-2 rounded-xl bg-slate-900 px-2.5 py-1.5">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[11px] font-bold text-purple-200">{vc.chapterTag}</p>
+                    <p className="text-[9px] text-slate-400">{vc.createdAt}</p>
+                  </div>
+                  <audio controls src={vc.audioUrl} className="h-7 w-36" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = voiceCards.filter((x) => x.id !== vc.id);
+                      setVoiceCards(next);
+                      try { localStorage.setItem(VOICE_NOTES_KEY, JSON.stringify(next)); } catch {}
+                    }}
+                    className="text-rose-400 hover:text-rose-300"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* OMR Simulator */}
+      {omrOpen && dueQuestions.length > 0 && (
         <div className="mt-3 space-y-2.5 border-t border-slate-200 pt-3 dark:border-slate-800">
           <p className="text-[11px] font-bold text-amber-600 dark:text-amber-300">
             ⚠️ असली NTA OMR नियम: एक बार गोला (A/B/C/D) भरने के बाद बदला नहीं जा सकेगा!
