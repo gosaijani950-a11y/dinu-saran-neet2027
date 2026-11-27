@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
   Lock, X, Send, Mic, Square, RotateCcw, Users, UserPlus,
   MessageSquareLock, Ban, Unlock, Search, UserCheck,
-  AlertCircle, Loader2, ShieldAlert, Flame, Swords
+  AlertCircle, Loader2, ShieldAlert, Flame, Swords, Radio
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
 
@@ -36,6 +36,9 @@ const BLK_K = 'dinu_neet2027_personal_blocks_v1';
 const QUE_K = 'dinu_neet2027_secret_outbox_v1';
 const LOCAL_CHAT_CACHE = 'dinu_neet2027_local_chats_v1';
 
+// Fallback project credentials if env/settings are not yet hydrated
+const FALLBACK_SB_URL = 'https://twcpuqcgowjwmkruohqw.supabase.co';
+
 export const SecretVaultModal: React.FC<Props> = ({
   isOpen, onClose, currentStudent, settings, onRequireLogin
 }) => {
@@ -46,8 +49,9 @@ export const SecretVaultModal: React.FC<Props> = ({
 
   const [tab, setTab] = useState<'dm' | 'group' | 'blocked'>('dm');
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<string[]>([]);
+  const [searchResults, setSearchResults] = useState<{ username: string; full_name?: string }[]>([]);
   const [searchingUsers, setSearchingUsers] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState('');
   const [dmChannel, setDmChannel] = useState('');
 
@@ -61,28 +65,37 @@ export const SecretVaultModal: React.FC<Props> = ({
   const [sending, setSending] = useState(false);
   const [rec, setRec] = useState(false);
   const [sec, setSec] = useState(0);
+  const [liveConnected, setLiveConnected] = useState(false);
 
-  // Feature #2: Burn-After-Reading Toggle (0 = Normal, 15 = 15s Self-Destruct)
   const [burnSeconds, setBurnSeconds] = useState<0 | 15>(0);
-
-  // Feature #1: 1v1 NCERT Quiz Duel State
   const [duelOpen, setDuelOpen] = useState(false);
   const [duelAnswers, setDuelAnswers] = useState<Record<number, number>>({});
 
   const recRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const getSb = () => {
+  const getSb = useCallback(() => {
     try {
       const env = (import.meta as unknown as { env?: Record<string, string> })?.env || {};
-      const u = String(settings?.supabaseUrl || env.VITE_SUPABASE_URL || '').trim();
+      const u = String(settings?.supabaseUrl || env.VITE_SUPABASE_URL || FALLBACK_SB_URL).trim();
       const k = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || '').trim();
       return u && k && u.startsWith('http') ? createClient(u, k) : null;
     } catch {
       return null;
     }
-  };
+  }, [settings?.supabaseUrl, settings?.supabaseAnonKey]);
+
+  const myHandle = (() => {
+    try {
+      const fullProf = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
+      const raw = String(fullProf.username || (currentStudent as any)?.username || '@aspirant').trim().toLowerCase();
+      return raw.startsWith('@') ? raw : `@${raw}`;
+    } catch {
+      return '@aspirant';
+    }
+  })();
 
   useEffect(() => {
     if (!isOpen) return;
@@ -96,38 +109,49 @@ export const SecretVaultModal: React.FC<Props> = ({
       const g = localStorage.getItem(GRP_K); if (g) setGroup(JSON.parse(g));
       const b = localStorage.getItem(BLK_K); if (b) setBlocked(JSON.parse(b));
       const q = localStorage.getItem(QUE_K); if (q) setQueue(JSON.parse(q));
+
+      // Auto-sync current user into student_registry so others can always find them
+      const sb = getSb();
+      if (sb && fullProf.username && fullProf.mobile && fullProf.secret_code) {
+        const cleanU = String(fullProf.username).trim().toLowerCase();
+        const normU = cleanU.startsWith('@') ? cleanU : `@${cleanU}`;
+        sb.from('student_registry').upsert([{
+          username: normU,
+          full_name: String(fullProf.full_name || currentStudent?.name || ''),
+          mobile: String(fullProf.mobile),
+          security_code: String(fullProf.security_code || fullProf.secret_code),
+          secret_code: String(fullProf.secret_code),
+        }], { onConflict: 'username' }).then(() => {});
+      }
     } catch {}
-  }, [isOpen, currentStudent]);
+  }, [isOpen, currentStudent, getSb]);
 
-  const myHandle = (() => {
-    try {
-      const fullProf = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
-      return String(fullProf.username || (currentStudent as any)?.username || '@aspirant').toLowerCase();
-    } catch {
-      return '@aspirant';
-    }
-  })();
-
-  // Instagram-Style Live User Search
+  // Smart Live Search (works on focus & as-you-type, with or without '@')
   useEffect(() => {
     if (!isOpen || !unlocked || tab !== 'dm') return;
+    if (!searchFocused && !searchQuery.trim()) return;
+
     const cleanQ = searchQuery.trim().toLowerCase().replace(/^@+/, '');
-    if (!cleanQ) {
-      setSearchResults([]);
-      return;
-    }
     const timer = window.setTimeout(async () => {
       setSearchingUsers(true);
       try {
         const sb = getSb();
         if (sb) {
-          const { data } = await sb
-            .from('student_registry')
-            .select('username')
-            .ilike('username', `@${cleanQ}%`)
-            .limit(8);
+          let req = sb.from('student_registry').select('username, full_name').limit(15);
+          if (cleanQ) {
+            req = req.or(`username.ilike.%${cleanQ}%,full_name.ilike.%${cleanQ}%`);
+          }
+          const { data } = await req;
           const list = Array.isArray(data)
-            ? data.map((r: any) => String(r.username)).filter((u) => u !== myHandle && !blocked.includes(u))
+            ? data
+                .map((r: any) => {
+                  const raw = String(r.username || '').trim().toLowerCase();
+                  return {
+                    username: raw.startsWith('@') ? raw : `@${raw}`,
+                    full_name: String(r.full_name || ''),
+                  };
+                })
+                .filter((u) => u.username && u.username !== myHandle && !blocked.includes(u.username))
             : [];
           setSearchResults(list);
         }
@@ -136,55 +160,107 @@ export const SecretVaultModal: React.FC<Props> = ({
       } finally {
         setSearchingUsers(false);
       }
-    }, 250);
+    }, 200);
     return () => window.clearTimeout(timer);
-  }, [searchQuery, isOpen, unlocked, tab, myHandle, blocked]);
+  }, [searchQuery, searchFocused, isOpen, unlocked, tab, myHandle, blocked, getSb]);
 
   const channel = tab === 'dm' ? dmChannel : tab === 'group' && group?.code ? `grp_${group.code}` : '';
 
-  useEffect(() => {
-    if (!isOpen || !unlocked || !channel) return;
+  const fetchLatestChannelMessages = useCallback(async () => {
+    if (!channel) return;
     const localStuck = queue.filter((m) => m.channel_key === channel);
     const sb = getSb();
     if (!sb) {
       setMsgs(localStuck);
       return;
     }
-    sb.from('secret_messages')
-      .select('*')
-      .eq('channel_key', channel)
-      .order('created_at', { ascending: false })
-      .limit(20)
-      .then(({ data }) => {
-        const latest20 = Array.isArray(data)
-          ? data.reverse().map((r: any) => ({
-              id: String(r.id),
-              channel_key: String(r.channel_key),
-              sender_username: String(r.sender_username),
-              text: String(r.text),
-              audio_data: r.voice_payload || null,
-              status: 'sent' as const,
-            }))
-          : [];
-        try {
-          const cache = JSON.parse(localStorage.getItem(LOCAL_CHAT_CACHE) || '{}');
-          cache[channel] = latest20;
-          localStorage.setItem(LOCAL_CHAT_CACHE, JSON.stringify(cache));
-        } catch {}
-        setMsgs([...latest20, ...localStuck]);
+    try {
+      const { data } = await sb
+        .from('secret_messages')
+        .select('*')
+        .eq('channel_key', channel)
+        .order('created_at', { ascending: false })
+        .limit(20);
 
-        // Auto-burn any incoming [BURN15] message after 15 seconds
-        latest20.forEach((m) => {
-          if (m.sender_username !== myHandle && m.text.startsWith('🔥[BURN15]')) {
-            window.setTimeout(async () => {
-              setMsgs((prev) => prev.filter((x) => x.id !== m.id));
-              await sb.from('secret_messages').delete().eq('id', m.id);
-            }, 15000);
+      const latest20 = Array.isArray(data)
+        ? data.reverse().map((r: any) => ({
+            id: String(r.id),
+            channel_key: String(r.channel_key),
+            sender_username: String(r.sender_username),
+            text: String(r.text),
+            audio_data: r.voice_payload || null,
+            status: 'sent' as const,
+          }))
+        : [];
+
+      try {
+        const cache = JSON.parse(localStorage.getItem(LOCAL_CHAT_CACHE) || '{}');
+        cache[channel] = latest20;
+        localStorage.setItem(LOCAL_CHAT_CACHE, JSON.stringify(cache));
+      } catch {}
+
+      setMsgs([...latest20, ...localStuck]);
+
+      latest20.forEach((m) => {
+        if (m.sender_username !== myHandle && m.text.startsWith('🔥[BURN15]')) {
+          window.setTimeout(async () => {
+            setMsgs((prev) => prev.filter((x) => x.id !== m.id));
+            await sb.from('secret_messages').delete().eq('id', m.id);
+          }, 15000);
+        }
+      });
+    } catch {
+      setMsgs(localStuck);
+    }
+  }, [channel, queue, getSb, myHandle]);
+
+  // REALTIME LIVE SUBSCRIPTION + 2.5s FAST SYNC (NO MANUAL REFRESH NEEDED)
+  useEffect(() => {
+    if (!isOpen || !unlocked || !channel) {
+      setLiveConnected(false);
+      return;
+    }
+
+    void fetchLatestChannelMessages();
+
+    const sb = getSb();
+    let subChannel: any = null;
+    if (sb) {
+      subChannel = sb
+        .channel(`live_${channel}_${Date.now()}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'secret_messages',
+            filter: `channel_key=eq.${channel}`,
+          },
+          () => {
+            void fetchLatestChannelMessages();
           }
+        )
+        .subscribe((status: string) => {
+          setLiveConnected(status === 'SUBSCRIBED');
         });
-      })
-      .catch(() => setMsgs(localStuck));
-  }, [isOpen, unlocked, channel, queue, myHandle]);
+    }
+
+    // Fast background sync every 2.5s so messages always arrive instantly even on mobile networks
+    const poll = window.setInterval(() => {
+      void fetchLatestChannelMessages();
+    }, 2500);
+
+    return () => {
+      window.clearInterval(poll);
+      if (sb && subChannel) {
+        void sb.removeChannel(subChannel);
+      }
+    };
+  }, [isOpen, unlocked, channel, fetchLatestChannelMessages, getSb]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [msgs.length]);
 
   if (!isOpen) return null;
 
@@ -203,6 +279,7 @@ export const SecretVaultModal: React.FC<Props> = ({
   const selectRegisteredUser = (targetUsername: string) => {
     setSelectedPeer(targetUsername);
     setSearchQuery('');
+    setSearchFocused(false);
     setSearchResults([]);
     const pair = [myHandle.replace('@', ''), targetUsername.replace('@', '')].sort().join('__');
     setDmChannel(`dm_${pair}`);
@@ -217,6 +294,9 @@ export const SecretVaultModal: React.FC<Props> = ({
       try { localStorage.setItem(QUE_K, JSON.stringify(nq)); } catch {}
       setMsgs((p) => [...p.filter((x) => x.id !== draft.id), stuck]);
     };
+
+    // Optimistically show message immediately on sender's screen
+    setMsgs((p) => [...p.filter((x) => x.id !== draft.id), { ...draft, status: 'sent' }]);
 
     if (!sb || (typeof navigator !== 'undefined' && !navigator.onLine)) return saveStuck();
     try {
@@ -243,7 +323,6 @@ export const SecretVaultModal: React.FC<Props> = ({
       const nq = queue.filter((x) => x.id !== draft.id);
       setQueue(nq);
       try { localStorage.setItem(QUE_K, JSON.stringify(nq)); } catch {}
-      setMsgs((p) => [...p.filter((x) => x.id !== draft.id), { ...draft, status: 'sent' }]);
     } catch {
       saveStuck();
     }
@@ -347,8 +426,15 @@ export const SecretVaultModal: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <MessageSquareLock className="w-5 h-5 text-amber-400" />
             <div>
-              <h3 className="text-xs font-extrabold text-white">DINU SARAN • Secret Chat</h3>
-              <p className="text-[10px] text-slate-400">{myHandle} • Registered Users Only</p>
+              <h3 className="flex items-center gap-1.5 text-xs font-extrabold text-white">
+                DINU SARAN • Secret Chat
+                {channel && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[9px] text-emerald-300">
+                    <Radio className="w-2.5 h-2.5 animate-pulse" /> {liveConnected ? 'LIVE' : 'SYNC'}
+                  </span>
+                )}
+              </h3>
+              <p className="text-[10px] text-slate-400">{myHandle} • Instant Realtime Vault</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-xl p-1.5 text-slate-400 hover:text-white">
@@ -417,31 +503,35 @@ export const SecretVaultModal: React.FC<Props> = ({
                       <input
                         type="text"
                         value={searchQuery}
+                        onFocus={() => setSearchFocused(true)}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder="Instagram की तरह @username सर्च करें..."
+                        placeholder="@username या नाम सर्च करें (टैप करके लिस्ट देखें)..."
                         className="flex-1 bg-transparent text-xs text-white focus:outline-none"
                       />
                       {searchingUsers && <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />}
                     </div>
 
-                    {searchQuery.trim() && (
-                      <div className="mt-1.5 max-h-40 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 shadow-xl">
+                    {(searchFocused || searchQuery.trim()) && (
+                      <div className="mt-1.5 max-h-44 overflow-y-auto rounded-xl border border-slate-700 bg-slate-950 shadow-xl">
                         {searchResults.length === 0 && !searchingUsers ? (
                           <p className="px-3 py-2.5 text-[11px] text-slate-400">
-                            कोई रजिस्टर्ड यूज़र नहीं मिला (केवल मौजूद IDs से ही चैट हो सकती है)।
+                            कोई दूसरा रजिस्टर्ड यूज़र नहीं मिला (अपनी खुद की ID सर्च में नहीं दिखती; दूसरे अकाउंट से रजिस्टर होने पर यहाँ दिखेगी)।
                           </p>
                         ) : (
                           searchResults.map((u) => (
                             <button
-                              key={u}
+                              key={u.username}
                               type="button"
-                              onClick={() => selectRegisteredUser(u)}
+                              onClick={() => selectRegisteredUser(u.username)}
                               className="flex w-full items-center justify-between border-b border-slate-800/70 px-3 py-2 text-left text-xs hover:bg-indigo-600/20"
                             >
-                              <span className="flex items-center gap-1.5 font-bold text-amber-300">
-                                <UserCheck className="w-3.5 h-3.5 text-emerald-400" /> {u}
-                              </span>
-                              <span className="text-[10px] text-indigo-300">Tap to Chat →</span>
+                              <div>
+                                <span className="flex items-center gap-1.5 font-bold text-amber-300">
+                                  <UserCheck className="w-3.5 h-3.5 text-emerald-400" /> {u.username}
+                                </span>
+                                {u.full_name && <p className="pl-5 text-[10px] text-slate-400">{u.full_name}</p>}
+                              </div>
+                              <span className="text-[10px] text-indigo-300">Chat →</span>
                             </button>
                           ))
                         )}
@@ -478,7 +568,6 @@ export const SecretVaultModal: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* 1v1 NCERT Quiz Duel Mini-Overlay */}
                 {duelOpen && channel && (
                   <div className="border-b border-amber-500/30 bg-amber-950/30 p-3 space-y-2 text-xs">
                     <p className="font-extrabold text-amber-300">⚔️ 1v1 NCERT Quiz Duel (+4 / -1)</p>
@@ -508,7 +597,7 @@ export const SecretVaultModal: React.FC<Props> = ({
                 <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
                   {!channel ? (
                     <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
-                      ऊपर सर्च बार में रजिस्टर्ड @username चुनें या Private Study Group खोलें।
+                      ऊपर सर्च बार पर टैप करके रजिस्टर्ड @username चुनें या Private Study Group खोलें।
                     </div>
                   ) : (
                     msgs.map((m) => (
@@ -526,6 +615,7 @@ export const SecretVaultModal: React.FC<Props> = ({
                       </div>
                     ))
                   )}
+                  <div ref={bottomRef} />
                 </div>
 
                 {channel && (
