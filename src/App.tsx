@@ -97,6 +97,7 @@ import { GlobalSafeErrorBoundary, formatNeetExamText } from './utils/neetEngine'
 import { SecretVaultModal } from './components/SecretVaultModal';
 import { StudentProfileModal } from './components/StudentProfileModal';
 import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './components/NeetAdvancedTools';
+import { AiQuizStudioModal } from './components/AiQuizStudioModal';
 
 
 
@@ -223,6 +224,7 @@ export default function App() {
   const batchStemsRef = useRef<Set<string>>(new Set());
   const [showSecretHub, setShowSecretHub] = useState(false);
     const [showMyProfile, setShowMyProfile] = useState(false);
+    const [showAiStudio, setShowAiStudio] = useState(false);
   const [needsFullOnboarding, setNeedsFullOnboarding] = useState<boolean>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
@@ -1141,6 +1143,19 @@ void studentFeatures.recordQuizInLeaderboard(summary);
           >
             {route === 'home' && (
             <>
+                                <div className="mb-2.5 flex items-center justify-between rounded-2xl border border-indigo-500/30 bg-indigo-950/40 px-3.5 py-2">
+                    <div className="text-xs font-extrabold text-indigo-200">
+                      ✨ AI Custom Quiz & PDF Folder Studio (100% Local)
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowAiStudio(true)}
+                      className="rounded-xl bg-gradient-to-r from-indigo-600 to-emerald-600 px-3 py-1.5 text-[11px] font-extrabold text-white shadow hover:opacity-95"
+                    >
+                      Open AI Studio
+                    </button>
+                  </div>
+
             <NeetCountdownAndFreezeBar streak={globalStreak} onToast={showToast} />
 <SmartRevisionAndOmrWidget
   mistakes={mistakes}
@@ -1563,6 +1578,17 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         student={studentFeatures.studentProfile}
         streak={globalStreak}
         settings={settings}
+      />
+      <AiQuizStudioModal
+        isOpen={showAiStudio}
+        onClose={() => setShowAiStudio(false)}
+        onToast={showToast}
+        onSaveToChapterBank={(subj, chap, qs) => {
+          showToast?.(`✅ ${subj} • ${chap} के आपके पर्सनल पूल में ${qs.length} प्रश्न जुड़ गए।`, 'success');
+        }}
+        onStartLiveAttempt={(qs, cfg) => {
+          handlePracticeCustomPool(qs, `${cfg.title} • ${cfg.quizType} (${cfg.durationMins}m)`);
+        }}
       />
 
       {/* Toast Notification Stack */}
