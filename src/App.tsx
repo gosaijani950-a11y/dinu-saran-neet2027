@@ -1,1564 +1,926 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, Info, XCircle } from 'lucide-react';
-import type {
-  AppSettings,
-  BatchGenerationProgress,
-  CloudSyncStatus,
-  MCQQuestion,
-  MistakeRecord,
-  PYQItem,
-  PendingBatchJob,
-  ProcessedUploadBundle,
-  QuestionReport,
-  QuizCheckpoint,
-  QuizConfig,
-  QuizResultSummary,
-  ShortNote,
-  SpecialItem,
-  StudentSuggestion,
-  StudyNote,
-  SubjectName,
-  UnifiedQuestionItem,
-  UploadedModule,
-  UserRole,
-  ViewRoute,
-} from './types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
-  applyCloudSyncSnapshot,
-  db,
-  ensureStarterSeeded,
-  getDatabaseStats,
-  getUnifiedQuestionMap,
-  loadAppSettings,
-  loadModuleBundle,
-  loadPendingBatchJob,
-  recordQuizMistakes,
-  saveAppSettings,
-  savePendingBatchJob,
-  type DatabaseStats,
-} from './db/database';
-import { generateMCQBatch } from './services/geminiService';
-import {
-  checkCurrentAdminSession,
-  clearCloudStudySection,
-  fetchQuestionReportsFromCloud,
-  fetchSuggestionsFromCloud,
-  getSupabaseClient,
-  isSupabaseConfigured,
-  pullPublishedStudyData,
-  pushFullLocalLibraryToCloud,
-  pushQueuedQuestionReportsToCloud,
-  signOutAdmin,
-  upsertCloudModule,
-  upsertCloudQuestions,
-} from './services/supabaseService';
-import {
-  MAX_SINGLE_RUN_QUESTIONS,
-  MCQ_BATCH_SIZE,
-  buildUnifiedQuestionMap,
-  deduplicateQuestions,
-  evaluateQuizPerformance,
-} from './utils/quizLogic';
-import { mergeCustomSubjectsIntoStorage } from './utils/subjects';
-import { TopBar } from './components/TopBar';
-import { SideDrawer } from './components/SideDrawer';
-import { SettingsModal } from './components/SettingsModal';
-import { RulesModal } from './components/RulesModal';
-import { HelpModal } from './components/HelpModal';
-import { AdminLoginModal } from './components/AdminLoginModal';
-import { SuggestionModal } from './components/SuggestionModal';
-import { SuggestionsInboxView } from './components/SuggestionsInboxView';
-import { ReportQuestionModal } from './components/ReportQuestionModal';
-import { ReportsInboxView } from './components/ReportsInboxView';
-import { HomeHub } from './components/HomeHub';
-import { QuizSetup } from './components/QuizSetup';
-import { ActiveQuiz } from './components/ActiveQuiz';
-import { QuizResult } from './components/QuizResult';
-import { ModulesStudio } from './components/ModulesStudio';
-import {
-  NotesView,
-  PYQsView,
-  SaveVaultView,
-  ShortNotesView,
-  SpecialView,
-  StarVaultView,
-} from './components/StudyVaults';
-import { MistakeBank } from './components/MistakeBank';
-import { BackupManager, type ClearTarget } from './components/BackupManager';
-import { useStudentFeatures } from './hooks/useStudentFeatures';
-import { StudentOnboardingModal } from './components/StudentOnboardingModal';
-import { LeaderboardView } from './components/LeaderboardView';
-import { StudyVaultView } from './components/StudyVaultView';
-import { FloatingAiAssistant } from './components/FloatingAiAssistant';
-import { CommunityChatView } from './components/CommunityChatView';
-import { Flame, ArrowLeft } from 'lucide-react';
-import { GlobalSafeErrorBoundary, formatNeetExamText } from './utils/neetEngine';
-import { SecretDirectChatModal } from './components/SecretDirectChatModal';
+  Lock,
+  X,
+  Send,
+  Mic,
+  Square,
+  RotateCcw,
+  Users,
+  UserPlus,
+  MessageSquareLock,
+  Ban,
+  Unlock,
+  BookOpen,
+  Eye,
+  EyeOff,
+  AlertCircle,
+  Loader2,
+  ShieldAlert,
+  Copy,
+  Check,
+  Wifi,
+  WifiOff,
+  KeyRound,
+} from 'lucide-react';
+import type { AppSettings, StudentProfile } from '../types';
+import { formatNeetExamText, NCERT_ACTIVE_RECALL_CARDS } from '../utils/neetEngine';
 
-const DEFAULT_QUIZ_CONFIG: QuizConfig = {
-  subject: 'All',
-  chapters: [],
-  sourceMode: 'bank',
-  questionCount: 20,
-  difficulty: 'Mixed',
-  patterns: {
-    ncertLine: true,
-    exception: false,
-    assertionReason: false,
-    statementType: false,
-    numerical: false,
-    diagramConcept: false,
-  },
-  revealMode: 'practice',
-  layoutMode: 'scroll',
-  scoringMode: 'neet',
-  languageMode: 'hindi_only',
-  timerMinutes: 30,
-  untimed: false,
-  deepNcertExpansion: false,
-};
+interface SecretVaultModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  currentStudent: StudentProfile | null;
+  settings: AppSettings;
+  onRequireLogin: () => void;
+}
 
-const INITIAL_BATCH_PROGRESS: BatchGenerationProgress = {
-  status: 'idle',
-  targetCount: 0,
-  generatedCount: 0,
-  currentBatch: 0,
-  totalBatches: 0,
-  generatedQuestionIds: [],
-  coveredConcepts: [],
-  failedBatchIndex: null,
-  errorMessage: null,
-  activeNotice: null,
-};
-
-const EMPTY_STATS: DatabaseStats = {
-  totalQuestions: 0,
-  notesCount: 0,
-  shortNotesCount: 0,
-  pyqsCount: 0,
-  specialsCount: 0,
-  modulesCount: 0,
-  mistakesCount: 0,
-  savedQuestionsCount: 0,
-  starredTotalCount: 0,
-  quizHistoryCount: 0,
-  approxMb: 0,
-};
-
-interface ToastItem {
+interface SecretMsg {
   id: string;
-  message: string;
-  tone: 'success' | 'error' | 'info';
+  channel_key: string;
+  sender_id: string;
+  sender_name: string;
+  sender_username: string;
+  text: string;
+  audio_data?: string | null;
+  status: 'sent' | 'stuck';
+  created_at?: string;
 }
 
-interface RollingJobContext {
-  config: QuizConfig;
-  bundle: ProcessedUploadBundle | null;
-  moduleId?: string;
+interface PrivateGroup {
+  code: string;
+  name: string;
 }
 
-export default function App() {
-  const [settings, setSettings] = useState<AppSettings>(() => loadAppSettings());
-  const [route, setRoute] = useState<ViewRoute>('home');
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<'gemini' | 'cloud'>('gemini');
-  const [rulesOpen, setRulesOpen] = useState(false);
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [adminLoginOpen, setAdminLoginOpen] = useState(false);
-  const [suggestionModalOpen, setSuggestionModalOpen] = useState(false);
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+const PIN_KEY = 'dinu_neet2027_secret_pin_v1';
+const GRP_KEY = 'dinu_neet2027_my_private_group_v1';
+const BLK_KEY = 'dinu_neet2027_personal_blocks_v1';
+const QUE_KEY = 'dinu_neet2027_secret_outbox_v1';
 
-  // Strict Role-Based Access Control (Default public link is ALWAYS locked student mode)
-  const [role, setRole] = useState<UserRole>('student');
-  const [adminEmail, setAdminEmail] = useState<string | null>(null);
-  const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>('local');
-
-  // IndexedDB React Mirrors
-  const [stats, setStats] = useState<DatabaseStats>(EMPTY_STATS);
-  const [questions, setQuestions] = useState<MCQQuestion[]>([]);
-  const [notes, setNotes] = useState<StudyNote[]>([]);
-  const [shortNotes, setShortNotes] = useState<ShortNote[]>([]);
-  const [pyqs, setPyqs] = useState<PYQItem[]>([]);
-  const [specials, setSpecials] = useState<SpecialItem[]>([]);
-  const [modules, setModules] = useState<UploadedModule[]>([]);
-  const [mistakes, setMistakes] = useState<MistakeRecord[]>([]);
-  const [suggestions, setSuggestions] = useState<StudentSuggestion[]>([]);
-  const [questionReports, setQuestionReports] = useState<QuestionReport[]>([]);
-  const [reportTargetQuestion, setReportTargetQuestion] = useState<UnifiedQuestionItem | null>(null);
-  const [customSubjects, setCustomSubjects] = useState<string[]>([]);
-  const [checkpoint, setCheckpoint] = useState<QuizCheckpoint | null>(null);
-
-  // Quiz Workflow State (default bank mode for Students)
-  const [quizConfig, setQuizConfig] = useState<QuizConfig>(() => ({
-    ...DEFAULT_QUIZ_CONFIG,
-    sourceMode: 'bank',
-  }));
-  const [activeQuizIds, setActiveQuizIds] = useState<string[]>([]);
-  const [activeQuizQuestionsOverride, setActiveQuizQuestionsOverride] = useState<MCQQuestion[] | null>(null);
-  const [activeQuizConfig, setActiveQuizConfig] = useState<QuizConfig>(DEFAULT_QUIZ_CONFIG);
-  const [activeInitialAnswers, setActiveInitialAnswers] = useState<Record<string, number>>({});
-  const [activeInitialIndex, setActiveInitialIndex] = useState(0);
-  const [activeInitialSeconds, setActiveInitialSeconds] = useState(1800);
-  const [activeSessionUsesBatch, setActiveSessionUsesBatch] = useState(false);
-  const [latestResult, setLatestResult] = useState<QuizResultSummary | null>(null);
-  const [latestResultQuestions, setLatestResultQuestions] = useState<MCQQuestion[]>([]);
-
-  // Rolling Batch Engine State + Refs
-  const [batchProgress, setBatchProgress] = useState<BatchGenerationProgress>(INITIAL_BATCH_PROGRESS);
-  const [pendingBatchJob, setPendingBatchJob] = useState<PendingBatchJob | null>(() =>
-    loadPendingBatchJob()
-  );
-  const batchJobRef = useRef<RollingJobContext | null>(null);
-  const batchPausedRef = useRef(false);
-  const batchStoppedRef = useRef(false);
-  const batchAbortRef = useRef<AbortController | null>(null);
-  const batchGeneratedIdsRef = useRef<string[]>([]);
-  const batchCoveredRef = useRef<string[]>([]);
-  const batchStemsRef = useRef<Set<string>>(new Set());
-  const [showSecretHub, setShowSecretHub] = useState(false);
-const [globalStreak, setGlobalStreak] = useState<number>(() => {
+const readStorage = <T,>(key: string, fallback: T): T => {
+  if (typeof window === 'undefined') return fallback;
   try {
-    const raw = JSON.parse(localStorage.getItem('dinu_neet2027_streak_v1') || '{"count":1}');
-    return Math.max(1, Number(raw.count) || 1);
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
   } catch {
-    return 1;
+    return fallback;
   }
-});
+};
 
-  
+const writeStorage = (key: string, value: unknown): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore quota/private mode errors safely
+  }
+};
 
-
-  const showToast = useCallback((message: string, tone: 'success' | 'error' | 'info' = 'info') => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev.slice(-2), { id, message, tone }]);
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4200);
-  }, []);
-  const studentFeatures = useStudentFeatures(settings, showToast);
-
-  // Sync Theme and Global Font Scale on <html>
-  useEffect(() => {
-    const root = document.documentElement;
-    if (settings.theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
+const readPinSafely = (student: StudentProfile | null): string => {
+  try {
+    const profilePin = (student as Record<string, unknown> | null)?.security_pin;
+    if (typeof profilePin === 'string' && profilePin.trim().length >= 4) {
+      return profilePin.trim();
     }
-    root.style.fontSize = `${settings.fontScale}%`;
-    saveAppSettings(settings);
-  }, [settings]);
-
-  const refreshAllData = useCallback(async () => {
-    const [
-      qList,
-      nList,
-      snList,
-      pList,
-      spList,
-      modList,
-      mList,
-      sugList,
-      repList,
-      csList,
-      cp,
-      dbStats,
-    ] = await Promise.all([
-      db.questions.orderBy('createdAt').reverse().toArray(),
-      db.notes.orderBy('createdAt').reverse().toArray(),
-      db.shortNotes.orderBy('createdAt').reverse().toArray(),
-      db.pyqs.orderBy('createdAt').reverse().toArray(),
-      db.specials.orderBy('createdAt').reverse().toArray(),
-      db.modules.orderBy('createdAt').reverse().toArray(),
-      db.mistakes.toArray(),
-      db.suggestions.orderBy('createdAt').reverse().toArray(),
-      db.questionReports.orderBy('createdAt').reverse().toArray(),
-      db.customSubjects.toArray(),
-      db.quizCheckpoints.get('active'),
-      getDatabaseStats(),
-    ]);
-
-    setQuestions(qList);
-    setNotes(nList);
-    setShortNotes(snList);
-    setPyqs(pList);
-    setSpecials(spList);
-    setModules(modList);
-    setMistakes(mList);
-    setSuggestions(sugList);
-    setQuestionReports(repList);
-    const mergedSubjects = mergeCustomSubjectsIntoStorage(csList.map((c) => c.name));
-    setCustomSubjects(mergedSubjects);
-    setCheckpoint(cp ?? null);
-    setStats(dbStats);
-  }, []);
-
-  const refreshSuggestions = useCallback(async () => {
-    if (role === 'admin' && isSupabaseConfigured(settings)) {
-      try {
-        const cloudSugs = await fetchSuggestionsFromCloud(settings);
-        await db.transaction('rw', db.suggestions, async () => {
-          await db.suggestions.clear();
-          if (cloudSugs.length > 0) {
-            await db.suggestions.bulkPut(cloudSugs);
-          }
-        });
-      } catch {
-        // Keep local suggestions cache if offline
-      }
+    if (typeof window !== 'undefined') {
+      return (window.localStorage.getItem(PIN_KEY) || '').trim();
     }
-    const localSugs = await db.suggestions.orderBy('createdAt').reverse().toArray();
-    setSuggestions(localSugs);
-  }, [role, settings]);
+  } catch {
+    // Fallback
+  }
+  return '';
+};
 
-  const syncAdminReportsWithCloud = useCallback(
-    async (activeSettings: AppSettings) => {
-      const localReps = await db.questionReports.orderBy('createdAt').reverse().toArray();
-      if (!isSupabaseConfigured(activeSettings)) {
-        setQuestionReports(localReps);
-        return;
-      }
-      try {
-        const cloudReps = await fetchQuestionReportsFromCloud(activeSettings);
-        const cloudIds = new Set(cloudReps.map((r) => r.id));
-        const unsyncedLocal = localReps.filter((r) => !cloudIds.has(r.id));
-        if (unsyncedLocal.length > 0) {
-          await pushQueuedQuestionReportsToCloud(activeSettings, unsyncedLocal).catch(() => {});
-        }
-        const merged = [...unsyncedLocal, ...cloudReps].sort(
-          (a, b) => b.createdAt - a.createdAt
-        );
-        await db.transaction('rw', db.questionReports, async () => {
-          await db.questionReports.clear();
-          if (merged.length > 0) {
-            await db.questionReports.bulkPut(merged);
-          }
-        });
-        setQuestionReports(merged);
-      } catch {
-        setQuestionReports(localReps);
-      }
-    },
-    []
+const safeFormatText = (raw: unknown): React.ReactNode => {
+  const str = String(raw ?? '');
+  try {
+    return formatNeetExamText(str);
+  } catch {
+    return str;
+  }
+};
+
+export const SecretVaultModal: React.FC<SecretVaultModalProps> = ({
+  isOpen,
+  onClose,
+  currentStudent,
+  settings,
+  onRequireLogin,
+}) => {
+  // All hooks unconditionally at the top (Zero React Hook violation risk)
+  const [unlocked, setUnlocked] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [savedPin, setSavedPin] = useState('');
+  const [isResettingPin, setIsResettingPin] = useState(false);
+
+  const [tab, setTab] = useState<'dm' | 'group' | 'ncert' | 'blocked'>('dm');
+  const [peerInput, setPeerInput] = useState('');
+  const [dmChannel, setDmChannel] = useState('');
+
+  const [group, setGroup] = useState<PrivateGroup | null>(null);
+  const [joinCode, setJoinCode] = useState('');
+  const [groupName, setGroupName] = useState('');
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  const [blocked, setBlocked] = useState<string[]>([]);
+  const [messages, setMessages] = useState<SecretMsg[]>([]);
+  const [queue, setQueue] = useState<SecretMsg[]>([]);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
   );
 
-  const refreshQuestionReports = useCallback(async () => {
-    if (role === 'admin' && isSupabaseConfigured(settings)) {
-      await syncAdminReportsWithCloud(settings);
-      return;
-    }
-    const localReps = await db.questionReports.orderBy('createdAt').reverse().toArray();
-    setQuestionReports(localReps);
-  }, [role, settings, syncAdminReportsWithCloud]);
+  const [recording, setRecording] = useState(false);
+  const [seconds, setSeconds] = useState(0);
+  const [revealedCards, setRevealedCards] = useState<Record<string, boolean>>({});
 
-  const syncFromCloudAndCheckAdmin = useCallback(async () => {
-    if (!isSupabaseConfigured(settings)) {
-      setCloudSyncStatus('local');
-      setRole('student');
-      setAdminEmail(null);
-      return;
-    }
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const timerRef = useRef<number | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
 
-    setCloudSyncStatus('syncing');
+  // Memoized Supabase client so it is never recreated unnecessarily
+  const supabaseClient: SupabaseClient | null = useMemo(() => {
     try {
-      const cloudSnapshot = await pullPublishedStudyData(settings);
-      if (cloudSnapshot) {
-        await applyCloudSyncSnapshot(cloudSnapshot);
-        await refreshAllData();
-      }
-      setCloudSyncStatus('synced');
+      const env = (import.meta as unknown as { env?: Record<string, string> })?.env || {};
+      const url = String(settings?.supabaseUrl || env.VITE_SUPABASE_URL || '').trim();
+      const key = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || '').trim();
+      if (!url || !key || !url.startsWith('http')) return null;
+      return createClient(url, key, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
     } catch {
-      setCloudSyncStatus('error');
+      return null;
     }
+  }, [settings?.supabaseUrl, settings?.supabaseAnonKey]);
 
-    const session = await checkCurrentAdminSession(settings);
-    if (session.isAdmin) {
-      setRole('admin');
-      setAdminEmail(session.email);
-      try {
-        const cloudSugs = await fetchSuggestionsFromCloud(settings);
-        await db.transaction('rw', db.suggestions, async () => {
-          await db.suggestions.clear();
-          if (cloudSugs.length > 0) {
-            await db.suggestions.bulkPut(cloudSugs);
-          }
-        });
-        setSuggestions(cloudSugs);
-      } catch {
-        // Ignore suggestions fetch error on initial boot
-      }
-      await syncAdminReportsWithCloud(settings);
-    } else {
-      setRole('student');
-      setAdminEmail(null);
-    }
-  }, [settings, refreshAllData, syncAdminReportsWithCloud]);
-
-  // Initial Boot, Starter Seed, and Cloud Hydration
+  // Network status listener
   useEffect(() => {
-    void (async () => {
-      await ensureStarterSeeded();
-      await refreshAllData();
-      await syncFromCloudAndCheckAdmin();
-    })();
-    // Intentionally run once on boot; manual re-sync is triggered after Cloud Setup save.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Keep Supabase auth state synchronized
-  useEffect(() => {
-    const client = getSupabaseClient(settings);
-    if (!client) return;
-    const {
-      data: { subscription },
-    } = client.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT') {
-        setRole('student');
-        setAdminEmail(null);
-        setQuizConfig((prev) => ({ ...prev, sourceMode: 'bank' }));
-      }
-    });
+    if (typeof window === 'undefined') return;
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
     return () => {
-      subscription.unsubscribe();
+      window.removeEventListener('online', goOnline);
+      window.removeEventListener('offline', goOffline);
     };
-  }, [settings]);
-
-  const openSuggestionsCount = useMemo(
-    () => suggestions.filter((s) => s.status === 'open').length,
-    [suggestions]
-  );
-
-  const openReportsCount = useMemo(
-    () => questionReports.filter((r) => r.status === 'open').length,
-    [questionReports]
-  );
-
-  const unifiedQuestionsMap = useMemo<Record<string, UnifiedQuestionItem>>(
-    () => buildUnifiedQuestionMap(questions, pyqs),
-    [questions, pyqs]
-  );
-
-  const activeQuizQuestions = useMemo(() => {
-    if (activeQuizQuestionsOverride) {
-      // Keep Star/Save flags synced across both db.questions and db.pyqs
-      return activeQuizQuestionsOverride.map((q) => unifiedQuestionsMap[q.id] ?? q);
-    }
-    const ids = activeSessionUsesBatch
-      ? Array.from(new Set([...activeQuizIds, ...batchProgress.generatedQuestionIds]))
-      : activeQuizIds;
-    return ids
-      .map((id) => unifiedQuestionsMap[id])
-      .filter((q): q is UnifiedQuestionItem => Boolean(q));
-  }, [
-    activeQuizQuestionsOverride,
-    activeSessionUsesBatch,
-    activeQuizIds,
-    batchProgress.generatedQuestionIds,
-    unifiedQuestionsMap,
-  ]);
-
-  const updateSettings = useCallback(
-    (partial: Partial<AppSettings>) => {
-      setSettings((prev) => ({ ...prev, ...partial }));
-      if (role === 'admin' && partial.apiKey !== undefined && partial.apiKey.trim()) {
-        setQuizConfig((prev) =>
-          prev.sourceMode === 'bank' ? { ...prev, sourceMode: 'syllabus' } : prev
-        );
-      }
-    },
-    [role]
-  );
-
-  const handleAdjustFont = useCallback((delta: number) => {
-    setSettings((prev) => ({
-      ...prev,
-      fontScale: Math.min(130, Math.max(85, prev.fontScale + delta)),
-    }));
   }, []);
 
-  const handleAdminAuthenticated = useCallback(
-    async (email: string) => {
-      setRole('admin');
-      setAdminEmail(email);
-      if (isSupabaseConfigured(settings)) {
-        try {
-          const cloudSugs = await fetchSuggestionsFromCloud(settings);
-          await db.transaction('rw', db.suggestions, async () => {
-            await db.suggestions.clear();
-            if (cloudSugs.length > 0) {
-              await db.suggestions.bulkPut(cloudSugs);
-            }
-          });
-          setSuggestions(cloudSugs);
-        } catch {
-          // Ignore cloud inbox load failures
-        }
-        await syncAdminReportsWithCloud(settings);
-      }
-    },
-    [settings, syncAdminReportsWithCloud]
-  );
+  // Reset & hydrate safely whenever modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+    setUnlocked(false);
+    setPinInput('');
+    setErrorMsg('');
+    setIsResettingPin(false);
+    setSavedPin(readPinSafely(currentStudent));
+    setGroup(readStorage<PrivateGroup | null>(GRP_KEY, null));
+    setBlocked(readStorage<string[]>(BLK_KEY, []));
+    setQueue(readStorage<SecretMsg[]>(QUE_KEY, []));
+  }, [isOpen, currentStudent]);
 
-  const handleAdminLogout = useCallback(async () => {
-    await signOutAdmin(settings);
-    setRole('student');
-    setAdminEmail(null);
-    setSettingsOpen(false);
-    setRulesOpen(false);
-    setQuizConfig((prev) => ({ ...prev, sourceMode: 'bank' }));
-    if (route === 'suggestions' || route === 'reports') {
-      setRoute('home');
+  // Cleanup active mic/timers when modal closes or unmounts
+  useEffect(() => {
+    if (isOpen) return;
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
     }
-    showToast('Switched to Locked Student Mode.', 'info');
-  }, [settings, route, showToast]);
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      try {
+        recorderRef.current.stop();
+      } catch {}
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    setRecording(false);
+  }, [isOpen]);
 
-  const handlePushLibraryToCloud = useCallback(async () => {
-    if (role !== 'admin') return;
-    if (!isSupabaseConfigured(settings)) {
-      showToast('Configure your Supabase URL and Anon Key first.', 'error');
+  const uid = String(currentStudent?.id || 'guest_student');
+  const uname = String(
+    currentStudent?.full_name ||
+      (currentStudent as Record<string, unknown> | null)?.name ||
+      'NEET Aspirant'
+  );
+  const cleanHandle = String(
+    (currentStudent as Record<string, unknown> | null)?.username ||
+      uname.toLowerCase().replace(/[^a-z0-9]/g, '') ||
+      'aspirant'
+  ).replace(/^@+/, '');
+  const handle = `@${cleanHandle}`;
+
+  const activeChannel =
+    tab === 'dm'
+      ? dmChannel
+      : tab === 'group' && group?.code
+      ? `grp_${group.code}`
+      : '';
+
+  // Load channel history + offline stuck items
+  useEffect(() => {
+    if (!isOpen || !unlocked || !activeChannel) return;
+    let cancelled = false;
+    const localStuck = queue.filter((m) => m.channel_key === activeChannel);
+
+    if (!supabaseClient || !isOnline) {
+      setMessages(localStuck);
+      return;
+    }
+
+    supabaseClient
+      .from('secret_messages')
+      .select('*')
+      .eq('channel_key', activeChannel)
+      .order('created_at', { ascending: true })
+      .limit(60)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error || !Array.isArray(data)) {
+          setMessages(localStuck);
+          return;
+        }
+        const remoteMsgs: SecretMsg[] = data.map((row: Record<string, unknown>) => ({
+          id: String(row.id || `rem_${Math.random()}`),
+          channel_key: String(row.channel_key || activeChannel),
+          sender_id: String(row.sender_id || ''),
+          sender_name: String(row.sender_name || 'Student'),
+          sender_username: String(row.sender_username || '@student'),
+          text: String(row.text || ''),
+          audio_data: row.audio_data ? String(row.audio_data) : null,
+          status: 'sent',
+          created_at: row.created_at ? String(row.created_at) : undefined,
+        }));
+        setMessages([...remoteMsgs, ...localStuck]);
+      })
+      .catch(() => {
+        if (!cancelled) setMessages(localStuck);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, unlocked, activeChannel, supabaseClient, isOnline, queue]);
+
+  // Safe auto-scroll
+  useEffect(() => {
+    if (!isOpen || !unlocked) return;
+    const id = window.setTimeout(() => {
+      endRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 60);
+    return () => window.clearTimeout(id);
+  }, [messages.length, isOpen, unlocked]);
+
+  if (!isOpen) return null;
+
+  const handlePinSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const clean = pinInput.trim();
+    if (!/^\d{4,8}$/.test(clean)) {
+      setErrorMsg('कृपया 4 से 8 अंकों का नंबर PIN डालें।');
+      return;
+    }
+    if (!savedPin || isResettingPin) {
+      try {
+        window.localStorage.setItem(PIN_KEY, clean);
+      } catch {}
+      setSavedPin(clean);
+      setIsResettingPin(false);
+      setUnlocked(true);
+      setErrorMsg('');
+      return;
+    }
+    if (clean === savedPin) {
+      setUnlocked(true);
+      setErrorMsg('');
+    } else {
+      setErrorMsg('गलत Security PIN! सही PIN डालें या नया सेट करें।');
+    }
+  };
+
+  const handleOpenDm = (e: React.FormEvent) => {
+    e.preventDefault();
+    const p = peerInput.trim().toLowerCase().replace(/^@+/, '');
+    if (!p) return;
+    if (blocked.includes(`@${p}`)) {
+      setErrorMsg(`@${p} को आपने ब्लॉक किया हुआ है। पहले Unblock करें।`);
+      return;
+    }
+    setErrorMsg('');
+    const pair = [cleanHandle.toLowerCase(), p].sort().join('__');
+    setDmChannel(`dm_${pair}`);
+  };
+
+  const handleCreateGroup = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (group) return;
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const created: PrivateGroup = {
+      code,
+      name: groupName.trim() || `${uname}'s NEET Group`,
+    };
+    setGroup(created);
+    writeStorage(GRP_KEY, created);
+    setGroupName('');
+  };
+
+  const handleJoinGroup = (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = joinCode.trim().replace(/\D/g, '').slice(0, 6);
+    if (code.length !== 6) {
+      setErrorMsg('कृपया 6-अंकों का ग्रुप कोड डालें।');
+      return;
+    }
+    setErrorMsg('');
+    const joined: PrivateGroup = { code, name: `Private Study Group #${code}` };
+    setGroup(joined);
+    writeStorage(GRP_KEY, joined);
+    setJoinCode('');
+  };
+
+  const copyGroupCode = () => {
+    if (!group?.code) return;
+    try {
+      navigator.clipboard?.writeText(group.code);
+      setCopiedCode(true);
+      window.setTimeout(() => setCopiedCode(false), 1800);
+    } catch {}
+  };
+
+  const dispatchMessage = async (draft: SecretMsg) => {
+    const saveOfflineStuck = () => {
+      const stuckItem: SecretMsg = { ...draft, status: 'stuck' };
+      const nextQueue = [...queue.filter((x) => x.id !== draft.id), stuckItem];
+      setQueue(nextQueue);
+      writeStorage(QUE_KEY, nextQueue);
+      setMessages((prev) => [...prev.filter((x) => x.id !== draft.id), stuckItem]);
+    };
+
+    if (!supabaseClient || !isOnline) {
+      saveOfflineStuck();
+      return;
+    }
+
+    try {
+      const { error } = await supabaseClient.from('secret_messages').insert([
+        {
+          channel_key: draft.channel_key,
+          sender_id: draft.sender_id,
+          sender_name: draft.sender_name,
+          sender_username: draft.sender_username,
+          text: draft.text,
+          audio_data: draft.audio_data || null,
+        },
+      ]);
+      if (error) throw error;
+
+      const nextQueue = queue.filter((x) => x.id !== draft.id);
+      setQueue(nextQueue);
+      writeStorage(QUE_KEY, nextQueue);
+      setMessages((prev) => [
+        ...prev.filter((x) => x.id !== draft.id),
+        { ...draft, status: 'sent' },
+      ]);
+    } catch {
+      saveOfflineStuck();
+    }
+  };
+
+  const handleSendText = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = text.trim();
+    if (!trimmed || !activeChannel || sending) return;
+    if (!currentStudent) {
+      onRequireLogin();
+      return;
+    }
+    setSending(true);
+    setText('');
+    await dispatchMessage({
+      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      channel_key: activeChannel,
+      sender_id: uid,
+      sender_name: uname,
+      sender_username: handle,
+      text: trimmed,
+      status: 'sent',
+      created_at: new Date().toISOString(),
+    });
+    setSending(false);
+  };
+
+  const stopRecording = () => {
+    if (timerRef.current) {
+      window.clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      try {
+        recorderRef.current.stop();
+      } catch {}
+    }
+    setRecording(false);
+  };
+
+  const startRecording = async () => {
+    if (!activeChannel || recording) return;
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setErrorMsg('आपके ब्राउज़र में Voice Note सपोर्ट उपलब्ध नहीं है।');
       return;
     }
     try {
-      setCloudSyncStatus('syncing');
-      const [allQs, allNotes, allShort, allPyqs, allSpec, allMods] = await Promise.all([
-        db.questions.toArray(),
-        db.notes.toArray(),
-        db.shortNotes.toArray(),
-        db.pyqs.toArray(),
-        db.specials.toArray(),
-        db.modules.toArray(),
-      ]);
-      await pushFullLocalLibraryToCloud(settings, {
-        questions: allQs,
-        notes: allNotes,
-        shortNotes: allShort,
-        pyqs: allPyqs,
-        specials: allSpec,
-        modules: allMods,
-      });
-      setCloudSyncStatus('synced');
-      showToast(
-        `Synced to Supabase: ${allQs.length} MCQs, ${allNotes.length} Notes, ${allShort.length} Short Notes, ${allPyqs.length} PYQs.`,
-        'success'
-      );
-    } catch (err) {
-      setCloudSyncStatus('error');
-      showToast(err instanceof Error ? err.message : 'Cloud sync failed.', 'error');
-    }
-  }, [role, settings, showToast]);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
 
-  const handleClearCloud = useCallback(
-    async (target: ClearTarget) => {
-      if (role !== 'admin') return;
-      if (target === 'mistakes' || target === 'quizHistory') return;
-      if (!isSupabaseConfigured(settings)) return;
-      try {
-        await clearCloudStudySection(settings, target);
-      } catch (err) {
-        showToast(
-          `Cleared locally, but cloud clear reported: ${err instanceof Error ? err.message : 'Error'}`,
-          'error'
-        );
-      }
-    },
-    [role, settings, showToast]
-  );
-
-  const handleToggleQuestionStar = useCallback(
-    async (questionId: string) => {
-      const existing = await db.questions.get(questionId);
-      if (existing) {
-        await db.questions.update(questionId, { isStarred: !existing.isStarred });
-        await refreshAllData();
-      } else {
-        // Check if it was a PYQ
-        const existingPyq = await db.pyqs.get(questionId);
-        if (existingPyq) {
-          await db.pyqs.update(questionId, { isStarred: !existingPyq.isStarred });
-          await refreshAllData();
-        }
-      }
-    },
-    [refreshAllData]
-  );
-
-  const handleToggleQuestionSave = useCallback(
-    async (questionId: string) => {
-      const existing = await db.questions.get(questionId);
-      if (existing) {
-        await db.questions.update(questionId, { isSaved: !existing.isSaved });
-        await refreshAllData();
-      } else {
-        const existingPyq = await db.pyqs.get(questionId);
-        if (existingPyq) {
-          await db.pyqs.update(questionId, { isSaved: !existingPyq.isSaved });
-          await refreshAllData();
-        }
-      }
-    },
-    [refreshAllData]
-  );
-
-  const handleAddCustomSubject = useCallback(
-    async (name: string) => {
-      if (role !== 'admin') return;
-      await db.customSubjects.put({ name, createdAt: Date.now() });
-      await refreshAllData();
-    },
-    [role, refreshAllData]
-  );
-
-  /* ==================== QUIZ LAUNCHERS ==================== */
-  const launchQuizSession = useCallback(
-    (
-      sessionQuestions: MCQQuestion[],
-      config: QuizConfig,
-      options?: {
-        initialAnswers?: Record<string, number>;
-        initialIndex?: number;
-        remainingSeconds?: number;
-        usesBatchStream?: boolean;
-        overrideList?: boolean;
-      }
-    ) => {
-      setActiveQuizConfig(config);
-      setActiveQuizIds(sessionQuestions.map((q) => q.id));
-      setActiveQuizQuestionsOverride(options?.overrideList ? sessionQuestions : null);
-      setActiveInitialAnswers(options?.initialAnswers ?? {});
-      setActiveInitialIndex(options?.initialIndex ?? 0);
-      setActiveInitialSeconds(
-        options?.remainingSeconds ?? Math.max(60, (config.timerMinutes || 30) * 60)
-      );
-      setActiveSessionUsesBatch(Boolean(options?.usesBatchStream));
-      setRoute('quiz-active');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    },
-    []
-  );
-
-  const handlePracticeCustomPool = useCallback(
-    (pool: MCQQuestion[], label: string) => {
-      const drillConfig: QuizConfig = {
-        ...DEFAULT_QUIZ_CONFIG,
-        subject: 'All',
-        chapters: [label],
-        sourceMode: 'bank',
-        questionCount: pool.length,
-        revealMode: 'practice',
-        layoutMode: 'scroll',
-        scoringMode: 'neet',
-        timerMinutes: Math.max(5, Math.ceil(pool.length * 1.2)),
-        untimed: false,
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) chunksRef.current.push(ev.data);
       };
-      const allInUnified = pool.every((q) => Boolean(unifiedQuestionsMap[q.id]));
-      launchQuizSession(pool, drillConfig, { overrideList: !allInUnified });
-    },
-    [launchQuizSession, unifiedQuestionsMap]
-  );
 
-  const handleCheckpointUpdate = useCallback(
-    (answers: Record<string, number>, currentIndex: number, remainingSeconds: number) => {
-      if (activeQuizQuestions.length === 0) return;
-      const cp: QuizCheckpoint = {
-        id: 'active',
-        config: activeQuizConfig,
-        questionIds: activeQuizQuestions.map((q) => q.id),
-        answers,
-        currentIndex,
-        remainingSeconds,
-        startedAt: checkpoint?.startedAt ?? Date.now(),
-        updatedAt: Date.now(),
-      };
-      void db.quizCheckpoints.put(cp).then(() => setCheckpoint(cp));
-    },
-    [activeQuizQuestions, activeQuizConfig, checkpoint?.startedAt]
-  );
-
-  const handleResumeCheckpoint = useCallback(async () => {
-    if (!checkpoint) return;
-    const unifiedMap = await getUnifiedQuestionMap();
-    const resolved = checkpoint.questionIds
-      .map((id) => unifiedMap[id])
-      .filter((q): q is UnifiedQuestionItem => Boolean(q));
-    if (resolved.length === 0) {
-      await db.quizCheckpoints.delete('active');
-      setCheckpoint(null);
-      showToast('Saved quiz questions are no longer in database.', 'info');
-      return;
-    }
-    launchQuizSession(resolved, checkpoint.config, {
-      initialAnswers: checkpoint.answers,
-      initialIndex: checkpoint.currentIndex,
-      remainingSeconds: checkpoint.remainingSeconds,
-    });
-  }, [checkpoint, launchQuizSession, showToast]);
-
-  const handleDiscardCheckpoint = useCallback(async () => {
-    await db.quizCheckpoints.delete('active');
-    setCheckpoint(null);
-    showToast('Unfinished quiz checkpoint discarded.', 'info');
-  }, [showToast]);
-
-  const handleSubmitQuiz = useCallback(
-    async (answers: Record<string, number>, submissionType: 'manual' | 'auto') => {
-      const qs = activeQuizQuestions;
-      const summary = evaluateQuizPerformance({
-        id: `res-${Date.now()}`,
-        config: activeQuizConfig,
-        questions: qs,
-        answers,
-        submissionType,
-      });
-
-      await db.quizHistory.put(summary);
-      await recordQuizMistakes(qs, answers);
-      await db.quizCheckpoints.delete('active');
-      setCheckpoint(null);
-      await refreshAllData();
-void studentFeatures.recordQuizInLeaderboard(summary);
-
-      setLatestResult(summary);
-      setLatestResultQuestions(qs);
-      setRoute('quiz-result');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    },
-    [activeQuizQuestions, activeQuizConfig, refreshAllData]
-  );
-
-  const handleReattemptLatest = useCallback(() => {
-    if (!latestResult || latestResultQuestions.length === 0) return;
-    const allInUnified = latestResultQuestions.every((q) => Boolean(unifiedQuestionsMap[q.id]));
-    launchQuizSession(latestResultQuestions, latestResult.config, {
-      overrideList: !allInUnified,
-    });
-  }, [latestResult, latestResultQuestions, unifiedQuestionsMap, launchQuizSession]);
-
-  /* ==================== ROLLING 500+ MCQ BATCH ENGINE (ADMIN ONLY) ==================== */
-  const persistPendingJobState = useCallback(
-    (
-      job: RollingJobContext,
-      targetCount: number,
-      batchSize: number,
-      nextBatchIndex: number,
-      totalBatches: number
-    ) => {
-      const pending: PendingBatchJob = {
-        config: job.config,
-        targetCount,
-        batchSize,
-        nextBatchIndex,
-        totalBatches,
-        generatedQuestionIds: [...batchGeneratedIdsRef.current],
-        coveredConcepts: [...batchCoveredRef.current],
-        moduleId: job.moduleId,
-        updatedAt: Date.now(),
-      };
-      savePendingBatchJob(pending);
-      setPendingBatchJob(pending);
-    },
-    []
-  );
-
-  const runBatchLoop = useCallback(
-    async (startBatchIndex: number) => {
-      if (role !== 'admin') return;
-      const job = batchJobRef.current;
-      if (!job) return;
-
-      const targetCount = Math.min(MAX_SINGLE_RUN_QUESTIONS, Math.max(1, job.config.questionCount));
-      const batchSize = Math.min(MCQ_BATCH_SIZE, targetCount);
-      const totalBatches = Math.max(1, Math.ceil(targetCount / batchSize));
-
-      batchStoppedRef.current = false;
-      batchPausedRef.current = false;
-
-      const existingConceptSet = new Set(batchCoveredRef.current.map((c) => c.toLowerCase()));
-      const existingStems = batchStemsRef.current;
-
-      setBatchProgress((prev) => ({
-        ...prev,
-        status: 'running',
-        targetCount,
-        totalBatches,
-        generatedCount: batchGeneratedIdsRef.current.length,
-        generatedQuestionIds: [...batchGeneratedIdsRef.current],
-        coveredConcepts: [...batchCoveredRef.current],
-        failedBatchIndex: null,
-        errorMessage: null,
-        activeNotice: `Using ${settings.modelId} (${settings.thinkingLevel.toUpperCase()} thinking · ${batchSize}/batch)`,
-      }));
-
-      persistPendingJobState(job, targetCount, batchSize, startBatchIndex, totalBatches);
-
-      for (let b = startBatchIndex; b < totalBatches; b++) {
-        // Wait while paused
-        while (batchPausedRef.current && !batchStoppedRef.current) {
-          await new Promise((r) => window.setTimeout(r, 250));
-        }
-        if (batchStoppedRef.current) {
-          persistPendingJobState(job, targetCount, batchSize, b, totalBatches);
-          setBatchProgress((prev) => ({
-            ...prev,
-            status: 'stopped',
-            activeNotice: `Stopped safely with ${prev.generatedCount} MCQs preserved in IndexedDB.`,
-          }));
-          return;
-        }
-
-        const remainingNeeded = targetCount - batchGeneratedIdsRef.current.length;
-        if (remainingNeeded <= 0) break;
-
-        const currentRequestCount = Math.min(batchSize, remainingNeeded);
-
-        // Slice uploaded PDF/image pages into chunks of 3–5 pages per call
-        let chunkPages = undefined;
-        if (job.bundle && job.bundle.pages.length > 0) {
-          const pagesPerChunk = 4;
-          const totalChunks = Math.max(1, Math.ceil(job.bundle.pages.length / pagesPerChunk));
-          const chunkIdx = b % totalChunks;
-          chunkPages = job.bundle.pages.slice(
-            chunkIdx * pagesPerChunk,
-            (chunkIdx + 1) * pagesPerChunk
-          );
-        }
-
-        setBatchProgress((prev) => ({
-          ...prev,
-          status: 'running',
-          currentBatch: b + 1,
-          totalBatches,
-          activeNotice: chunkPages
-            ? `Batch ${b + 1}/${totalBatches}: Analyzing pages ${chunkPages[0]?.pageNumber}–${chunkPages[chunkPages.length - 1]?.pageNumber}...`
-            : `Batch ${b + 1}/${totalBatches}: Generating ${currentRequestCount} unique Hindi NCERT MCQs...`,
-        }));
-
-        const controller = new AbortController();
-        batchAbortRef.current = controller;
-
-        try {
-          const { questions: batchQs, usedBackupKey } = await generateMCQBatch({
-            settings,
-            config: job.config,
-            batchIndex: b,
-            batchSize: currentRequestCount,
-            coveredConcepts: batchCoveredRef.current,
-            chunkPages,
-            sourceModuleId: job.moduleId,
-            signal: controller.signal,
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const dataUrl = String(reader.result || '');
+          if (!dataUrl) return;
+          dispatchMessage({
+            id: `aud_${Date.now()}`,
+            channel_key: activeChannel,
+            sender_id: uid,
+            sender_name: uname,
+            sender_username: handle,
+            text: `🎙️ Voice Note (${seconds || 1}s)`,
+            audio_data: dataUrl,
+            status: 'sent',
+            created_at: new Date().toISOString(),
           });
-
-          const uniqueBatch = deduplicateQuestions(batchQs, existingConceptSet, existingStems);
-          if (uniqueBatch.length > 0) {
-            await db.questions.bulkPut(uniqueBatch);
-            if (isSupabaseConfigured(settings)) {
-              void upsertCloudQuestions(settings, uniqueBatch).catch(() => {});
-            }
-            if (job.moduleId) {
-              const mod = await db.modules.get(job.moduleId);
-              if (mod) {
-                mod.generatedCounts.mcqs += uniqueBatch.length;
-                await db.modules.put(mod);
-                if (isSupabaseConfigured(settings)) {
-                  void upsertCloudModule(settings, mod).catch(() => {});
-                }
-              }
-            }
-            for (const q of uniqueBatch) {
-              batchGeneratedIdsRef.current.push(q.id);
-              if (q.concept_key) batchCoveredRef.current.push(q.concept_key);
-            }
-            await refreshAllData();
-          }
-
-          persistPendingJobState(job, targetCount, batchSize, b + 1, totalBatches);
-
-          setBatchProgress((prev) => ({
-            ...prev,
-            generatedCount: batchGeneratedIdsRef.current.length,
-            generatedQuestionIds: [...batchGeneratedIdsRef.current],
-            coveredConcepts: [...batchCoveredRef.current],
-            activeNotice: usedBackupKey
-              ? `Batch ${b + 1} succeeded via Backup API Key (429 fallback).`
-              : `Saved ${batchGeneratedIdsRef.current.length} / ${targetCount} unique Hindi MCQs.`,
-          }));
-
-          // Cooldown guard between batches to avoid free-tier RPM spikes
-          if (b < totalBatches - 1 && !batchStoppedRef.current) {
-            const cooldownMs = Math.max(500, Math.round(settings.batchCooldownSec * 1000));
-            setBatchProgress((prev) => ({
-              ...prev,
-              activeNotice: `Quota guard cooldown (${settings.batchCooldownSec}s) before Batch ${b + 2}...`,
-            }));
-            await new Promise((r) => window.setTimeout(r, cooldownMs));
-          }
-        } catch (err) {
-          if (batchStoppedRef.current) {
-            persistPendingJobState(job, targetCount, batchSize, b, totalBatches);
-            setBatchProgress((prev) => ({
-              ...prev,
-              status: 'stopped',
-              activeNotice: `Stopped safely with ${batchGeneratedIdsRef.current.length} MCQs saved.`,
-            }));
-            return;
-          }
-          persistPendingJobState(job, targetCount, batchSize, b, totalBatches);
-          const msg = err instanceof Error ? err.message : 'Unknown Gemini API error';
-          setBatchProgress((prev) => ({
-            ...prev,
-            status: 'error',
-            failedBatchIndex: b,
-            errorMessage: msg,
-            activeNotice: null,
-          }));
-          return;
-        }
-      }
-
-      savePendingBatchJob(null);
-      setPendingBatchJob(null);
-      setBatchProgress((prev) => ({
-        ...prev,
-        status: 'completed',
-        activeNotice: `All ${batchGeneratedIdsRef.current.length} unique Hindi NCERT MCQs saved to IndexedDB!`,
-      }));
-      showToast(
-        `Generation complete: ${batchGeneratedIdsRef.current.length} Hindi NCERT MCQs ready!`,
-        'success'
-      );
-    },
-    [role, settings, refreshAllData, showToast, persistPendingJobState]
-  );
-
-  const handleStartRollingGeneration = useCallback(
-    (config: QuizConfig, uploadBundle: ProcessedUploadBundle | null, moduleId?: string) => {
-      if (role !== 'admin') return;
-      const clampedTarget = Math.min(MAX_SINGLE_RUN_QUESTIONS, Math.max(1, config.questionCount));
-      const safeConfig: QuizConfig = { ...config, questionCount: clampedTarget };
-      const batchSize = Math.min(MCQ_BATCH_SIZE, clampedTarget);
-
-      batchJobRef.current = { config: safeConfig, bundle: uploadBundle, moduleId };
-      batchGeneratedIdsRef.current = [];
-      batchCoveredRef.current = [];
-      batchStemsRef.current = new Set(
-        questions.map((q) => q.question_hi.trim().replace(/\s+/g, ' ').toLowerCase())
-      );
-
-      setBatchProgress({
-        ...INITIAL_BATCH_PROGRESS,
-        status: 'running',
-        targetCount: clampedTarget,
-        totalBatches: Math.max(1, Math.ceil(clampedTarget / batchSize)),
-      });
-
-      void runBatchLoop(0);
-    },
-    [role, questions, runBatchLoop]
-  );
-
-  const handleResumePendingBatchJob = useCallback(async () => {
-    if (role !== 'admin' || !pendingBatchJob) return;
-    if (!settings.apiKey.trim()) {
-      showToast('Configure your Gemini API key in Settings (⚙️) to resume generation.', 'error');
-      setSettingsInitialTab('gemini');
-      setSettingsOpen(true);
-      return;
-    }
-
-    let restoredBundle: ProcessedUploadBundle | null = null;
-    if (pendingBatchJob.moduleId) {
-      restoredBundle = await loadModuleBundle(pendingBatchJob.moduleId);
-    }
-
-    batchJobRef.current = {
-      config: pendingBatchJob.config,
-      bundle: restoredBundle,
-      moduleId: pendingBatchJob.moduleId,
-    };
-    batchGeneratedIdsRef.current = [...pendingBatchJob.generatedQuestionIds];
-    batchCoveredRef.current = [...pendingBatchJob.coveredConcepts];
-    batchStemsRef.current = new Set(
-      questions.map((q) => q.question_hi.trim().replace(/\s+/g, ' ').toLowerCase())
-    );
-
-    setQuizConfig(pendingBatchJob.config);
-    setBatchProgress({
-      ...INITIAL_BATCH_PROGRESS,
-      status: 'running',
-      targetCount: pendingBatchJob.targetCount,
-      generatedCount: pendingBatchJob.generatedQuestionIds.length,
-      currentBatch: pendingBatchJob.nextBatchIndex + 1,
-      totalBatches: pendingBatchJob.totalBatches,
-      generatedQuestionIds: [...pendingBatchJob.generatedQuestionIds],
-      coveredConcepts: [...pendingBatchJob.coveredConcepts],
-    });
-
-    void runBatchLoop(pendingBatchJob.nextBatchIndex);
-  }, [role, pendingBatchJob, settings.apiKey, questions, runBatchLoop, showToast]);
-
-  const handleDismissPendingBatchJob = useCallback(() => {
-    savePendingBatchJob(null);
-    setPendingBatchJob(null);
-    showToast('Dismissed interrupted generation banner. Saved MCQs remain in IndexedDB.', 'info');
-  }, [showToast]);
-
-  const handleLaunchEarlyGeneratedQuiz = useCallback(() => {
-    const job = batchJobRef.current;
-    const ids = batchGeneratedIdsRef.current;
-    const readyQs = ids
-      .map((id) => unifiedQuestionsMap[id])
-      .filter((q): q is UnifiedQuestionItem => Boolean(q));
-    if (readyQs.length === 0) return;
-
-    launchQuizSession(readyQs, job?.config ?? quizConfig, {
-      usesBatchStream: true,
-    });
-  }, [unifiedQuestionsMap, quizConfig, launchQuizSession]);
-
-  const handleLaunchMcqGenerationFromModule = useCallback(
-    (params: {
-      subject: SubjectName;
-      chapter: string;
-      count: number;
-      bundle: ProcessedUploadBundle;
-      moduleId: string;
-    }) => {
-      if (role !== 'admin') return;
-      const nextCfg: QuizConfig = {
-        ...quizConfig,
-        subject: params.subject,
-        chapters: [params.chapter],
-        sourceMode: 'upload',
-        questionCount: params.count,
-        deepNcertExpansion: params.count >= 200,
+        };
+        reader.readAsDataURL(blob);
       };
-      setQuizConfig(nextCfg);
-      setRoute('quiz-setup');
-      handleStartRollingGeneration(nextCfg, params.bundle, params.moduleId);
-    },
-    [role, quizConfig, handleStartRollingGeneration]
-  );
 
-  const handleMarkMistakeMastered = useCallback(
-    async (questionId: string, mastered: boolean) => {
-      await db.mistakes.update(questionId, { mastered, updatedAt: Date.now() });
-      await refreshAllData();
-      showToast(
-        mastered
-          ? 'Marked as ✅ Mastered and cleared from active mistakes.'
-          : 'Moved back to Mistake Bank.',
-        'success'
-      );
-    },
-    [refreshAllData, showToast]
-  );
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+      setSeconds(1);
+      setErrorMsg('');
 
-  const openGeminiSettingsGuarded = useCallback(() => {
-    if (role !== 'admin') return;
-    setSettingsInitialTab('gemini');
-    setSettingsOpen(true);
-  }, [role]);
+      timerRef.current = window.setInterval(() => {
+        setSeconds((prev) => {
+          if (prev >= 15) {
+            stopRecording();
+            return 15;
+          }
+          return prev + 1;
+        });
+      }, 1000);
+    } catch {
+      setErrorMsg('Microphone की अनुमति दें ताकि 15s Voice Note भेजा जा सके।');
+    }
+  };
 
-  const openCloudSetup = useCallback(() => {
-    setSettingsInitialTab('cloud');
-    setSettingsOpen(true);
-  }, []);
+  const toggleBlock = (rawHandle: string) => {
+    const norm = `@${rawHandle.replace(/^@+/, '').toLowerCase()}`;
+    const updated = blocked.includes(norm)
+      ? blocked.filter((x) => x !== norm)
+      : [...blocked, norm];
+    setBlocked(updated);
+    writeStorage(BLK_KEY, updated);
+  };
 
-  const openRulesGuarded = useCallback(() => {
-    if (role !== 'admin') return;
-    setRulesOpen(true);
-  }, [role]);
+  const safeRecallCards = Array.isArray(NCERT_ACTIVE_RECALL_CARDS)
+    ? NCERT_ACTIVE_RECALL_CARDS
+    : [];
 
   return (
-    <GlobalSafeErrorBoundary>
-
-    <div className="min-h-screen obsidian-backdrop bg-[#F4F6FA] dark:bg-[#0B0E14] text-[#0F172A] dark:text-[#F1F5F9] transition-colors duration-150 flex flex-col">
-      {/* Persistent Top Header Bar */}
-      <TopBar
-        settings={settings}
-        role={role}
-        adminEmail={adminEmail}
-        cloudSyncStatus={cloudSyncStatus}
-        mistakeCount={stats.mistakesCount}
-        currentRoute={route}
-        onNavigateHome={() => setRoute('home')}
-        onOpenMistakes={() => setRoute('mistakes')}
-        onOpenSettings={openGeminiSettingsGuarded}
-        onOpenRules={openRulesGuarded}
-        onOpenHelp={() => setHelpOpen(true)}
-        onOpenDrawer={() => setDrawerOpen(true)}
-        onAdminLogout={() => void handleAdminLogout()}
-        onToggleTheme={() =>
-          updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
-        }
-        onAdjustFont={handleAdjustFont}
-        onLogoTap={() => setShowSecretHub(true)}
-
-      />
-{route !== 'home' && (
-  <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-3 pt-2.5 sm:px-4">
-    <button
-      type="button"
-      onClick={() => setRoute('home')}
-      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-sm transition hover:bg-indigo-600 hover:text-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
     >
-      <ArrowLeft className="w-3.5 h-3.5" /> Home
-    </button>
-
-    <div className="flex items-center gap-2">
-      
-      <span className="inline-flex items-center gap-1 rounded-full border border-orange-500/30 bg-orange-500/15 px-2.5 py-1 text-xs font-extrabold text-orange-600 dark:text-orange-300">
-        <Flame className="w-3.5 h-3.5 text-orange-500" /> {globalStreak}d
-      </span>
-    </div>
-  </div>
-)}
-
-      {/* Main Centered Compact Container */}
-      <main className="flex-1 w-full mx-auto max-w-3xl px-3 sm:px-4 pt-3.5">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={route}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+      <div className="flex h-[84vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+        {/* Top Header */}
+        <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950 px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400">
+              <MessageSquareLock className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-xs sm:text-sm font-extrabold text-white">
+                DINU SARAN • Secret Vault
+              </h3>
+              <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                <span>{handle}</span>
+                <span>•</span>
+                <span className="inline-flex items-center gap-1">
+                  {isOnline ? (
+                    <>
+                      <Wifi className="w-2.5 h-2.5 text-emerald-400" /> Online
+                    </>
+                  ) : (
+                    <>
+                      <WifiOff className="w-2.5 h-2.5 text-amber-400" /> Offline Safe
+                    </>
+                  )}
+                </span>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"
+            aria-label="Close Secret Vault"
           >
-            {route === 'home' && (
-              <HomeHub
-                creatorName={settings.creatorName}
-                role={role}
-                stats={stats}
-                checkpoint={checkpoint}
-                openSuggestionsCount={openSuggestionsCount}
-                openReportsCount={openReportsCount}
-                onNavigate={(r) => setRoute(r)}
-                onOpenSuggestion={() => setSuggestionModalOpen(true)}
-                onResumeCheckpoint={() => void handleResumeCheckpoint()}
-                onDiscardCheckpoint={() => void handleDiscardCheckpoint()}
-              />
-            )}
+            <X className="w-4 h-4" />
+          </button>
+        </div>
 
-            {route === 'quiz-setup' && (
-              <QuizSetup
-                role={role}
-                settings={settings}
-                allQuestions={questions}
-                customSubjects={customSubjects}
-                config={quizConfig}
-                onChangeConfig={setQuizConfig}
-                onAddCustomSubject={handleAddCustomSubject}
-                onStartFromBank={(selectedQs, cfg) => launchQuizSession(selectedQs, cfg)}
-                onStartRollingGeneration={(cfg, bundle, moduleId) =>
-                  handleStartRollingGeneration(cfg, bundle, moduleId)
-                }
-                batchProgress={batchProgress}
-                pendingBatchJob={pendingBatchJob}
-                onResumePendingBatchJob={() => void handleResumePendingBatchJob()}
-                onDismissPendingBatchJob={handleDismissPendingBatchJob}
-                onPauseBatch={() => {
-                  batchPausedRef.current = true;
-                  setBatchProgress((p) => ({ ...p, status: 'paused' }));
-                }}
-                onResumeBatch={() => {
-                  batchPausedRef.current = false;
-                  setBatchProgress((p) => ({ ...p, status: 'running' }));
-                }}
-                onStopBatch={() => {
-                  batchStoppedRef.current = true;
-                  batchPausedRef.current = false;
-                  batchAbortRef.current?.abort();
-                }}
-                onRetryFailedBatch={() => {
-                  if (batchProgress.failedBatchIndex !== null) {
-                    void runBatchLoop(batchProgress.failedBatchIndex);
-                  }
-                }}
-                onLaunchEarlyGeneratedQuiz={handleLaunchEarlyGeneratedQuiz}
-                onOpenSettings={openGeminiSettingsGuarded}
-                onBackHome={() => setRoute('home')}
-                onToast={showToast}
-              />
-            )}
+        {/* Step 1: Security PIN Gate */}
+        {!unlocked ? (
+          <form
+            onSubmit={handlePinSubmit}
+            className="flex flex-1 flex-col items-center justify-center space-y-4 p-6 text-center"
+          >
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-400/30 bg-amber-500/15 text-amber-400">
+              <Lock className="w-7 h-7" />
+            </div>
+            <div>
+              <h4 className="text-base font-extrabold text-white">
+                {savedPin && !isResettingPin
+                  ? 'Enter Private Security PIN'
+                  : 'Set Private Security PIN'}
+              </h4>
+              <p className="mt-1 max-w-xs text-xs text-slate-400">
+                {savedPin && !isResettingPin
+                  ? 'Direct Chat, 15s Voice Notes और Private Study Group खोलने के लिए PIN डालें।'
+                  : 'अपना नया 4 से 8 अंकों का निजी Security PIN सेट करें।'}
+              </p>
+            </div>
 
-            {route === 'quiz-active' && (
-              <ActiveQuiz
-                questions={activeQuizQuestions}
-                config={activeQuizConfig}
-                initialAnswers={activeInitialAnswers}
-                initialIndex={activeInitialIndex}
-                initialRemainingSeconds={activeInitialSeconds}
-                settings={settings}
-                batchProgress={batchProgress}
-                onCheckpointUpdate={handleCheckpointUpdate}
-                onToggleStar={(id) => void handleToggleQuestionStar(id)}
-                onToggleSave={(id) => void handleToggleQuestionSave(id)}
-                onReportQuestion={(q) => setReportTargetQuestion(q)}
-                onSubmitQuiz={(ans, type) => void handleSubmitQuiz(ans, type)}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'quiz-result' && latestResult && (
-              <QuizResult
-                result={latestResult}
-                questions={latestResultQuestions.map((q) => unifiedQuestionsMap[q.id] ?? q)}
-                settings={settings}
-                onReattempt={handleReattemptLatest}
-                onFinishHome={() => setRoute('home')}
-                onToggleStar={(id) => void handleToggleQuestionStar(id)}
-                onToggleSave={(id) => void handleToggleQuestionSave(id)}
-                onReportQuestion={(q) => setReportTargetQuestion(q)}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'notes' && (
-              <NotesView
-                role={role}
-                settings={settings}
-                customSubjects={customSubjects}
-                notes={notes}
-                onRefreshData={refreshAllData}
-                onOpenSettings={openGeminiSettingsGuarded}
-                onBackHome={() => setRoute('home')}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'short-notes' && (
-              <ShortNotesView
-                role={role}
-                settings={settings}
-                customSubjects={customSubjects}
-                shortNotes={shortNotes}
-                onRefreshData={refreshAllData}
-                onOpenSettings={openGeminiSettingsGuarded}
-                onBackHome={() => setRoute('home')}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'pyqs' && (
-              <PYQsView
-                role={role}
-                settings={settings}
-                customSubjects={customSubjects}
-                pyqs={pyqs}
-                onRefreshData={refreshAllData}
-                onPracticeQuestions={handlePracticeCustomPool}
-                onReportQuestion={(q) => setReportTargetQuestion(q)}
-                onOpenSettings={openGeminiSettingsGuarded}
-                onBackHome={() => setRoute('home')}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'special' && (
-              <SpecialView
-                role={role}
-                settings={settings}
-                customSubjects={customSubjects}
-                specials={specials}
-                onRefreshData={refreshAllData}
-                onOpenSettings={openGeminiSettingsGuarded}
-                onBackHome={() => setRoute('home')}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'modules' && (
-              <ModulesStudio
-                role={role}
-                settings={settings}
-                modules={modules}
-                customSubjects={customSubjects}
-                onRefreshData={refreshAllData}
-                onLaunchMcqGenerationFromModule={handleLaunchMcqGenerationFromModule}
-                onNavigate={(r) => setRoute(r)}
-                onOpenSettings={openGeminiSettingsGuarded}
-                onBackHome={() => setRoute('home')}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'star' && (
-              <StarVaultView
-                questions={questions}
-                notes={notes}
-                shortNotes={shortNotes}
-                pyqs={pyqs}
-                specials={specials}
-                modules={modules}
-                onPracticeQuestions={handlePracticeCustomPool}
-                onToggleQuestionStar={(id) => void handleToggleQuestionStar(id)}
-                onRefreshData={refreshAllData}
-                onBackHome={() => setRoute('home')}
-              />
-            )}
-
-            {route === 'save' && (
-              <SaveVaultView
-                questions={questions}
-                pyqs={pyqs}
-                onPracticeQuestions={handlePracticeCustomPool}
-                onToggleQuestionSave={(id) => void handleToggleQuestionSave(id)}
-                onBackHome={() => setRoute('home')}
-              />
-            )}
-
-            {route === 'mistakes' && (
-              <MistakeBank
-                mistakes={mistakes}
-                unifiedQuestionsMap={unifiedQuestionsMap}
-                onMarkMastered={handleMarkMistakeMastered}
-                onLaunchMistakeQuiz={(qs) => handlePracticeCustomPool(qs, 'Mistake Revision')}
-                onBackHome={() => setRoute('home')}
-              />
-            )}
-
-            {route === 'backup' && (
-              <BackupManager
-                role={role}
-                creatorName={settings.creatorName}
-                stats={stats}
-                customSubjects={customSubjects}
-                onRefreshData={refreshAllData}
-                onClearCloud={handleClearCloud}
-                onBackHome={() => setRoute('home')}
-                onToast={showToast}
-              />
-            )}
-
-            {route === 'suggestions' &&
-              (role === 'admin' ? (
-                <SuggestionsInboxView
-                  settings={settings}
-                  suggestions={suggestions}
-                  onRefreshSuggestions={refreshSuggestions}
-                  onBackHome={() => setRoute('home')}
-                  onToast={showToast}
-                />
-              ) : (
-                <HomeHub
-                  creatorName={settings.creatorName}
-                  role={role}
-                  stats={stats}
-                  checkpoint={checkpoint}
-                  openSuggestionsCount={openSuggestionsCount}
-                  openReportsCount={openReportsCount}
-                  onNavigate={(r) => setRoute(r)}
-                  onOpenSuggestion={() => setSuggestionModalOpen(true)}
-                  onResumeCheckpoint={() => void handleResumeCheckpoint()}
-                  onDiscardCheckpoint={() => void handleDiscardCheckpoint()}
-                />
-              ))}
-
-            {route === 'reports' &&
-              (role === 'admin' ? (
-                <ReportsInboxView
-                  settings={settings}
-                  reports={questionReports}
-                  unifiedQuestionsMap={unifiedQuestionsMap}
-                  onRefreshReports={refreshQuestionReports}
-                  onRefreshAllData={refreshAllData}
-                  onBackHome={() => setRoute('home')}
-                  onToast={showToast}
-                />
-              ) : (
-                <HomeHub
-                  creatorName={settings.creatorName}
-                  role={role}
-                  stats={stats}
-                  checkpoint={checkpoint}
-                  openSuggestionsCount={openSuggestionsCount}
-                  openReportsCount={openReportsCount}
-                  onNavigate={(r) => setRoute(r)}
-                  onOpenSuggestion={() => setSuggestionModalOpen(true)}
-                  onResumeCheckpoint={() => void handleResumeCheckpoint()}
-                  onDiscardCheckpoint={() => void handleDiscardCheckpoint()}
-                />
-              ))}
-                                  {route === 'leaderboard' && (
-              <LeaderboardView
-                currentStudent={studentFeatures.studentProfile}
-                fetchLeaderboard={studentFeatures.fetchLeaderboardList}
-                fetchGroupLeaderboard={studentFeatures.fetchGroupLeaderboard}
-                createOrJoinGroup={studentFeatures.createOrJoinGroup}
-              />
-            )}
-
-
-          {route === 'study-vault' && (
-            <StudyVaultView
-              isAdmin={role === 'admin'}
-              loadVault={studentFeatures.loadStudyVaultData}
-              onCreateFolder={studentFeatures.createVaultFolder}
-              onDeleteFolder={studentFeatures.deleteVaultFolder}
-              onCreateLink={studentFeatures.createVaultLink}
-              onDeleteLink={studentFeatures.deleteVaultLink}
-              onBack={() => setRoute('home')}
+            <input
+              type="password"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={8}
+              value={pinInput}
+              onChange={(e) => setPinInput(e.target.value.replace(/\D/g, ''))}
+              placeholder="••••"
+              className="w-44 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-center text-lg font-extrabold tracking-widest text-amber-300 focus:border-amber-400 focus:outline-none"
             />
-          )}
-            {route === 'community' && (
-  <CommunityChatView
-    currentStudent={studentFeatures.studentProfile}
-    settings={settings}
-    onRequireLogin={() => showToast('चैट करने के लिए पहले अपना Student Profile सेव करें।', 'info')}
-  />
-)}
 
-</motion.div>
-        </AnimatePresence>
-      </main>
+            {errorMsg && (
+              <p className="flex items-center gap-1 text-xs font-semibold text-rose-400">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" /> {errorMsg}
+              </p>
+            )}
 
-      {/* Slide-Out Side Drawer */}
-      <SideDrawer
-        isOpen={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        currentRoute={route}
-        stats={stats}
-        settings={settings}
-        role={role}
-        adminEmail={adminEmail}
-        openSuggestionsCount={openSuggestionsCount}
-        openReportsCount={openReportsCount}
-        onNavigate={(r) => setRoute(r)}
-        onOpenSettings={openGeminiSettingsGuarded}
-        onOpenCloudSetup={openCloudSetup}
-        onOpenHelp={() => setHelpOpen(true)}
-        onOpenSuggestion={() => setSuggestionModalOpen(true)}
-        onOpenAdminLogin={() => setAdminLoginOpen(true)}
-        onAdminLogout={() => void handleAdminLogout()}
-        onUpdateCreatorName={(name) => {
-          if (role !== 'admin') return;
-          updateSettings({ creatorName: name });
-          showToast(`Workspace name updated to ${name}.`, 'success');
-        }}
-        onAdjustFont={handleAdjustFont}
-      />
-
-      {/* Settings & Cloud Sync Modal */}
-      <SettingsModal
-        isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        settings={settings}
-        isAdmin={role === 'admin'}
-        initialTab={settingsInitialTab}
-        onUpdateSettings={updateSettings}
-        onCloudConfigSaved={syncFromCloudAndCheckAdmin}
-        onPushLibraryToCloud={handlePushLibraryToCloud}
-        onToast={showToast}
-      />
-
-      {/* Admin-Only Custom AI Rules Modal */}
-      {role === 'admin' && (
-        <RulesModal
-          isOpen={rulesOpen}
-          onClose={() => setRulesOpen(false)}
-          rules={settings.customRules}
-          onSaveRules={(nextRules) => {
-            updateSettings({ customRules: nextRules });
-            showToast('Custom AI Rules saved and active for all Gemini calls.', 'success');
-          }}
-        />
-      )}
-
-      {/* Admin Login Modal */}
-      <AdminLoginModal
-        isOpen={adminLoginOpen}
-        onClose={() => setAdminLoginOpen(false)}
-        settings={settings}
-        onOpenCloudSetup={openCloudSetup}
-        onLoginSuccess={handleAdminAuthenticated}
-        onToast={showToast}
-      />
-
-      {/* Student Suggestion & Feedback Modal */}
-      <SuggestionModal
-        isOpen={suggestionModalOpen}
-        onClose={() => setSuggestionModalOpen(false)}
-        settings={settings}
-        onSubmitted={async () => {
-          await refreshSuggestions();
-        }}
-        onToast={showToast}
-      />
-
-      {/* Question Report Modal (Students & Practice) */}
-      <ReportQuestionModal
-        question={reportTargetQuestion}
-        onClose={() => setReportTargetQuestion(null)}
-        settings={settings}
-        onSubmitted={async (_report, savedToCloud) => {
-          if (!savedToCloud || role === 'admin') {
-            await refreshQuestionReports();
-          }
-        }}
-        onToast={showToast}
-      />
-
-      {/* Help & Contact Us Modal */}
-      <HelpModal
-        isOpen={helpOpen}
-        onClose={() => setHelpOpen(false)}
-        isAdmin={role === 'admin'}
-        onOpenSuggestion={() => setSuggestionModalOpen(true)}
-        onToast={showToast}
-      />
-      {!studentFeatures.studentProfile && role !== 'admin' && (
-        <StudentOnboardingModal onComplete={studentFeatures.saveStudentProfile} />
-      )}
-<FloatingAiAssistant settings={settings} />
-
-
-<SecretDirectChatModal
-  isOpen={showSecretHub}
-  onClose={() => setShowSecretHub(false)}
-  currentStudent={studentFeatures.studentProfile}
-  settings={settings}
-    onRequireLogin={() => {
-    setShowSecretHub(false);
-    setRoute('home');
-  }}
-
-/>
-
-      {/* Toast Notification Stack */}
-      <div
-        aria-live="polite"
-        className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-[calc(100vw-2rem)] pointer-events-none"
-      >
-        <AnimatePresence>
-          {toasts.map((t) => (
-            <motion.div
-              key={t.id}
-              initial={{ opacity: 0, y: 14, scale: 0.96 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.96 }}
-              className={`pointer-events-auto rounded-2xl px-4 py-3 text-xs font-semibold shadow-xl border backdrop-blur-xl flex items-start gap-2.5 ${
-                t.tone === 'success'
-                  ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-100'
-                  : t.tone === 'error'
-                  ? 'bg-rose-950/90 border-rose-500/40 text-rose-100'
-                  : 'bg-slate-900/90 border-white/15 text-slate-100'
-              }`}
+            <button
+              type="submit"
+              className="rounded-2xl bg-amber-500 px-6 py-2.5 text-xs font-extrabold text-slate-950 transition hover:bg-amber-400"
             >
-              {t.tone === 'success' ? (
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-              ) : t.tone === 'error' ? (
-                <XCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              ) : (
-                <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
-              )}
-              <span>{t.message}</span>
-            </motion.div>
-          ))}
-        </AnimatePresence>
+              {savedPin && !isResettingPin ? 'Unlock Vault' : 'Save PIN & Enter'}
+            </button>
+
+            {savedPin && !isResettingPin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsResettingPin(true);
+                  setPinInput('');
+                  setErrorMsg('');
+                }}
+                className="inline-flex items-center gap-1 text-[11px] text-slate-400 hover:text-amber-300"
+              >
+                <KeyRound className="w-3 h-3" /> PIN भूल गए? नया PIN सेट करें
+              </button>
+            )}
+          </form>
+        ) : (
+          <>
+            {/* Navigation Tabs */}
+            <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] font-bold">
+              <button
+                type="button"
+                onClick={() => setTab('dm')}
+                className={`rounded-xl px-2.5 py-1.5 ${
+                  tab === 'dm' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'
+                }`}
+              >
+                Direct Chat
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('group')}
+                className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${
+                  tab === 'group' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'
+                }`}
+              >
+                <Users className="w-3 h-3" /> Group
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('ncert')}
+                className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${
+                  tab === 'ncert' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300'
+                }`}
+              >
+                <BookOpen className="w-3 h-3" /> NCERT
+              </button>
+              <button
+                type="button"
+                onClick={() => setTab('blocked')}
+                className={`ml-auto rounded-xl px-2 py-1.5 ${
+                  tab === 'blocked' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400'
+                }`}
+                title="Blocked Users"
+              >
+                <Ban className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="flex items-center justify-between bg-rose-950/80 px-3 py-1.5 text-[11px] text-rose-300">
+                <span>{errorMsg}</span>
+                <button type="button" onClick={() => setErrorMsg('')} className="font-bold">
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Tab 3: NCERT Active Recall */}
+            {tab === 'ncert' ? (
+              <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
+                {safeRecallCards.map((c) => {
+                  const isShown = !!revealedCards[c.id];
+                  return (
+                    <div
+                      key={c.id}
+                      className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-3"
+                    >
+                      <div className="flex justify-between text-[10px]">
+                        <span className="font-bold text-emerald-400">{c.subject}</span>
+                        <span className="text-slate-400">{c.chapter}</span>
+                      </div>
+                      <p className="text-xs leading-relaxed text-slate-100">
+                        {safeFormatText(c.statementWithBlank)}
+                      </p>
+                      <div className="flex items-center justify-between pt-1">
+                        {isShown ? (
+                          <span className="rounded-lg bg-emerald-500/15 px-2 py-0.5 text-xs font-extrabold text-emerald-300">
+                            उत्तर: {safeFormatText(c.answer)}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-slate-500">उत्तर छिपा है</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRevealedCards((p) => ({ ...p, [c.id]: !p[c.id] }))
+                          }
+                          className="inline-flex items-center gap-1 rounded-xl bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-indigo-300"
+                        >
+                          {isShown ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                          {isShown ? 'छिपाएं' : 'उत्तर देखें'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : tab === 'blocked' ? (
+              /* Tab 4: User-Level Block List */
+              <div className="flex-1 space-y-2 overflow-y-auto p-4">
+                <h4 className="text-xs font-extrabold text-rose-400">
+                  Blocked Users ({blocked.length})
+                </h4>
+                {blocked.length === 0 ? (
+                  <p className="text-xs text-slate-400">अभी आपने किसी को ब्लॉक नहीं किया है।</p>
+                ) : (
+                  blocked.map((u) => (
+                    <div
+                      key={u}
+                      className="flex items-center justify-between rounded-xl bg-slate-800 px-3 py-2 text-xs"
+                    >
+                      <span className="font-bold">{u}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleBlock(u)}
+                        className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white"
+                      >
+                        <Unlock className="w-3 h-3" /> Unblock
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : (
+              /* Tab 1 & 2: Direct Chat & Private Group */
+              <div className="flex flex-1 flex-col overflow-hidden">
+                {tab === 'dm' ? (
+                  <form
+                    onSubmit={handleOpenDm}
+                    className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-950/40 px-3 py-2"
+                  >
+                    <input
+                      type="text"
+                      value={peerInput}
+                      onChange={(e) => setPeerInput(e.target.value)}
+                      placeholder="दोस्त का @username लिखें..."
+                      className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      className="rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white"
+                    >
+                      Open
+                    </button>
+                    {peerInput.trim() && (
+                      <button
+                        type="button"
+                        onClick={() => toggleBlock(peerInput)}
+                        className="rounded-xl bg-rose-500/20 px-2.5 py-1.5 text-[11px] font-bold text-rose-300"
+                      >
+                        Block
+                      </button>
+                    )}
+                  </form>
+                ) : !group ? (
+                  <div className="space-y-2 border-b border-slate-800 bg-slate-950/40 p-3">
+                    <form onSubmit={handleCreateGroup} className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={groupName}
+                        onChange={(e) => setGroupName(e.target.value)}
+                        placeholder="1 User = 1 Private Group नाम..."
+                        className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
+                      />
+                      <button
+                        type="submit"
+                        className="rounded-xl bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white"
+                      >
+                        Create
+                      </button>
+                    </form>
+                    <form onSubmit={handleJoinGroup} className="flex gap-1.5">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={joinCode}
+                        onChange={(e) => setJoinCode(e.target.value.replace(/\D/g, ''))}
+                        placeholder="6-Digit कोड से जुड़ें..."
+                        className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
+                      />
+                      <button
+                        type="submit"
+                        className="inline-flex items-center gap-1 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-bold text-white"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" /> Join
+                      </button>
+                    </form>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between border-b border-slate-800 bg-indigo-950/30 px-3.5 py-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-white">{group.name}</span>
+                      <button
+                        type="button"
+                        onClick={copyGroupCode}
+                        className="inline-flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-amber-300"
+                        title="Copy 6-Digit Secret Code"
+                      >
+                        Code: {group.code}
+                        {copiedCode ? <Check className="w-2.5 h-2.5" /> : <Copy className="w-2.5 h-2.5" />}
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setGroup(null);
+                        try {
+                          window.localStorage.removeItem(GRP_KEY);
+                        } catch {}
+                      }}
+                      className="text-[10px] text-rose-400 hover:underline"
+                    >
+                      Leave
+                    </button>
+                  </div>
+                )}
+
+                {/* Messages Feed */}
+                <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
+                  {!activeChannel ? (
+                    <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
+                      ऊपर दोस्त का @username लिखकर Open दबाएं या 6-Digit Private Study Group बनाएं।
+                    </div>
+                  ) : messages.length === 0 ? (
+                    <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
+                      यह एन्क्रिप्टेड प्राइवेट चैट खाली है। पहला संदेश या 15s Voice Note भेजें!
+                    </div>
+                  ) : (
+                    messages.map((m) => {
+                      const isMine = m.sender_id === uid;
+                      return (
+                        <div
+                          key={m.id}
+                          className={`flex max-w-[84%] flex-col ${
+                            isMine ? 'ml-auto items-end' : 'mr-auto items-start'
+                          }`}
+                        >
+                          <span className="mb-0.5 text-[10px] text-slate-400">
+                            {isMine ? 'You' : `${m.sender_name} (${m.sender_username})`}
+                          </span>
+                          <div
+                            className={`rounded-2xl px-3 py-2 text-xs ${
+                              isMine
+                                ? 'rounded-tr-sm bg-indigo-600 text-white'
+                                : 'rounded-tl-sm bg-slate-800 text-slate-100'
+                            }`}
+                          >
+                            {m.audio_data ? (
+                              <div className="space-y-1">
+                                <div className="text-[11px] font-bold">{m.text}</div>
+                                <audio controls src={m.audio_data} className="h-8 w-48" />
+                              </div>
+                            ) : (
+                              safeFormatText(m.text)
+                            )}
+                          </div>
+                          {m.status === 'stuck' && (
+                            <div className="mt-1 flex items-center gap-1.5 text-[10px] text-amber-400">
+                              <ShieldAlert className="w-3 h-3" />
+                              <span>⏳ Stuck (Offline)</span>
+                              <button
+                                type="button"
+                                onClick={() => dispatchMessage(m)}
+                                className="inline-flex items-center gap-0.5 rounded bg-amber-500/20 px-1.5 py-0.5 font-bold hover:bg-amber-500/30"
+                              >
+                                <RotateCcw className="w-2.5 h-2.5" /> Retry Send
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                  <div ref={endRef} />
+                </div>
+
+                {/* Message Composer */}
+                {activeChannel && (
+                  <form
+                    onSubmit={handleSendText}
+                    className="flex items-center gap-1.5 border-t border-slate-800 bg-slate-950 p-2.5"
+                  >
+                    <button
+                      type="button"
+                      onClick={recording ? stopRecording : startRecording}
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
+                        recording
+                          ? 'animate-pulse bg-rose-600 text-white'
+                          : 'bg-slate-800 text-slate-300 hover:text-amber-400'
+                      }`}
+                      title={recording ? 'Stop Recording' : 'Record 15s Voice Note'}
+                    >
+                      {recording ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                    </button>
+                    <input
+                      type="text"
+                      value={text}
+                      onChange={(e) => setText(e.target.value)}
+                      placeholder={
+                        recording ? `Recording ${seconds}s / 15s...` : 'प्राइवेट संदेश लिखें...'
+                      }
+                      className="flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={sending || !text.trim()}
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40"
+                    >
+                      {sending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
+          </>
+        )}
       </div>
     </div>
-      </GlobalSafeErrorBoundary>
-
   );
-}
+};
