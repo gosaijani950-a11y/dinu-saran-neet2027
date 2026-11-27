@@ -1093,6 +1093,8 @@ void studentFeatures.recordQuizInLeaderboard(summary);
           updateSettings({ theme: settings.theme === 'dark' ? 'light' : 'dark' })
         }
         onAdjustFont={handleAdjustFont}
+        onLogoTap={() => setShowSecretHub(true)}
+
       />
 {route !== 'home' && (
   <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-3 pt-2.5 sm:px-4">
@@ -1105,14 +1107,7 @@ void studentFeatures.recordQuizInLeaderboard(summary);
     </button>
 
     <div className="flex items-center gap-2">
-      <button
-        type="button"
-        onClick={() => setShowSecretHub(true)}
-        className="inline-flex items-center gap-1 rounded-xl border border-amber-400/40 bg-slate-900 px-2.5 py-1.5 text-[11px] font-extrabold text-amber-300 shadow-sm transition hover:bg-slate-800"
-        title="Secret Vault (PIN Required)"
-      >
-        <span>🔐 Secret Hub</span>
-      </button>
+      
       <span className="inline-flex items-center gap-1 rounded-full border border-orange-500/30 bg-orange-500/15 px-2.5 py-1 text-xs font-extrabold text-orange-600 dark:text-orange-300">
         <Flame className="w-3.5 h-3.5 text-orange-500" /> {globalStreak}d
       </span>
@@ -1516,24 +1511,18 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         <StudentOnboardingModal onComplete={studentFeatures.saveStudentProfile} />
       )}
 <FloatingAiAssistant settings={settings} />
-<button
-  type="button"
-  onClick={() => setShowSecretHub(true)}
-  className="fixed bottom-20 right-4 z-40 inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-slate-900/95 px-3 py-2 text-[11px] font-extrabold text-amber-300 shadow-xl backdrop-blur-md transition hover:scale-105"
-  title="Secret Chat & Voice Notes (PIN Required)"
->
-  <span>🔐 Secret Chat</span>
-  <span className="text-orange-300">• 🔥 {globalStreak}d</span>
-</button>
+
 
 <SecretDirectChatModal
   isOpen={showSecretHub}
   onClose={() => setShowSecretHub(false)}
   currentStudent={studentFeatures.studentProfile}
   settings={settings}
-  onRequireLogin={() =>
-    showToast('Secret Hub खोलने के लिए पहले Student Profile सेव करें।', 'info')
-  }
+    onRequireLogin={() => {
+    setShowSecretHub(false);
+    setRoute('home');
+  }}
+
 />
 
       {/* Toast Notification Stack */}
