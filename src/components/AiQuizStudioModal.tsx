@@ -101,7 +101,6 @@ const SUBJECT_CHAPTERS: Record<string, string[]> = {
   ],
 };
 
-// Authentic NTA NEET Exam-Grade Question Bank (Zero boilerplate templates)
 const AUTHENTIC_NEET_POOL: Record<string, Array<{
   chapter: string;
   difficulty: 'Easy' | 'Medium' | 'Hard';
@@ -909,7 +908,6 @@ export const AiQuizStudioModal: React.FC<AiQuizStudioModalProps> = ({
       aria-label="AI Custom Quiz & Media Studio"
     >
       <div className="w-full max-w-4xl max-h-[92vh] rounded-2xl bg-white dark:bg-[#141923] border border-slate-200 dark:border-white/[0.08] shadow-2xl flex flex-col overflow-hidden">
-        {/* Top Header */}
         <div className="px-4 py-3 border-b border-slate-200 dark:border-white/[0.06] flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-[#6366F1] dark:text-indigo-400">
@@ -959,7 +957,6 @@ export const AiQuizStudioModal: React.FC<AiQuizStudioModalProps> = ({
           </div>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {activeTab === 'create' ? (
             <>
@@ -1026,7 +1023,6 @@ export const AiQuizStudioModal: React.FC<AiQuizStudioModalProps> = ({
                 />
               </div>
 
-              {/* Document, PDF, Image & Video Upload Bar */}
               <div className="rounded-xl p-3 bg-[#F4F6FA] dark:bg-[#0E121B] border border-dashed border-slate-300 dark:border-white/[0.12] space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="text-xs font-semibold text-[#0F172A] dark:text-[#F1F5F9]">
@@ -1109,7 +1105,6 @@ export const AiQuizStudioModal: React.FC<AiQuizStudioModalProps> = ({
                 )}
               </div>
 
-              {/* Quiz Configuration Controls */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <div>
                   <label className="block text-[11px] font-semibold text-[#64748B] mb-1">
@@ -1186,7 +1181,6 @@ export const AiQuizStudioModal: React.FC<AiQuizStudioModalProps> = ({
                 </div>
               </div>
 
-              {/* Generate Action */}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -1229,7 +1223,6 @@ export const AiQuizStudioModal: React.FC<AiQuizStudioModalProps> = ({
                 )}
               </div>
 
-              {/* Save to Custom Folder + Preview */}
               {generatedQuestions.length > 0 && (
                 <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-white/[0.06]">
                   <div className="flex flex-wrap items-center gap-2">
