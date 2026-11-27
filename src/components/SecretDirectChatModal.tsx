@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
   Lock,
@@ -10,8 +10,6 @@ import {
   Users,
   UserPlus,
   MessageSquareLock,
-  Copy,
-  Check,
   Ban,
   Unlock,
   BookOpen,
@@ -32,7 +30,7 @@ interface SecretDirectChatModalProps {
   onRequireLogin: () => void;
 }
 
-export interface SecretMessageItem {
+interface SecretMessageItem {
   id: string;
   channel_key: string;
   sender_id: string;
@@ -50,23 +48,15 @@ const MY_GROUP_KEY = 'dinu_neet2027_my_private_group_v1';
 const BLOCKED_USERS_KEY = 'dinu_neet2027_personal_blocks_v1';
 const SECRET_QUEUE_KEY = 'dinu_neet2027_secret_outbox_v1';
 
-const safeReadJson = <T,>(key: string, fallback: T): T => {
+const getSavedPin = (student: StudentProfile | null): string => {
   try {
-    const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
+    const profilePin = (student as any)?.security_pin;
+    if (typeof profilePin === 'string' && profilePin.trim()) return profilePin.trim();
+    return (localStorage.getItem(PIN_KEY) || '').trim();
   } catch {
-    return fallback;
+    return '';
   }
 };
-
-const safeWriteJson = (key: string, val: unknown) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(val));
-  } catch {}
-};
-
-const generateSixDigitCode = () =>
-  Math.floor(100000 + Math.random() * 900000).toString();
 
 export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
   isOpen,
@@ -75,50 +65,22 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
   settings,
   onRequireLogin,
 }) => {
-  const safeStudentId = String(currentStudent?.id || 'guest_student');
-  const safeStudentName = String(
-    currentStudent?.full_name || (currentStudent as any)?.name || 'NEET Aspirant'
-  );
-  const safeUsername = useMemo(() => {
-    const raw =
-      (currentStudent as any)?.username ||
-      safeStudentName.toLowerCase().replace(/[^a-z0-9]/g, '') ||
-      'aspirant';
-    return `@${String(raw).replace(/^@+/, '')}`;
-  }, [currentStudent, safeStudentName]);
-
-  const savedPin = useMemo(() => {
-    const fromProfile = String((currentStudent as any)?.security_pin || '').trim();
-    if (fromProfile) return fromProfile;
-    try {
-      return (localStorage.getItem(PIN_KEY) || '').trim();
-    } catch {
-      return '';
-    }
-  }, [currentStudent]);
-
   const [isUnlocked, setIsUnlocked] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState('');
+  const [savedPin, setSavedPin] = useState('');
 
   const [activeTab, setActiveTab] = useState<'dm' | 'group' | 'ncert' | 'blocked'>('dm');
   const [peerHandle, setPeerHandle] = useState('');
-  const [activeDmChannel, setActiveDmChannel] = useState<string>('');
+  const [activeDmChannel, setActiveDmChannel] = useState('');
 
-  const [myGroup, setMyGroup] = useState<{ code: string; name: string } | null>(() =>
-    safeReadJson(MY_GROUP_KEY, null)
-  );
+  const [myGroup, setMyGroup] = useState<{ code: string; name: string } | null>(null);
   const [joinCodeInput, setJoinCodeInput] = useState('');
   const [newGroupName, setNewGroupName] = useState('');
 
-  const [blockedUsers, setBlockedUsers] = useState<string[]>(() =>
-    safeReadJson(BLOCKED_USERS_KEY, [])
-  );
-
+  const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
   const [messages, setMessages] = useState<SecretMessageItem[]>([]);
-  const [outboxQueue, setOutboxQueue] = useState<SecretMessageItem[]>(() =>
-    safeReadJson(SECRET_QUEUE_KEY, [])
-  );
+  const [outboxQueue, setOutboxQueue] = useState<SecretMessageItem[]>([]);
   const [textInput, setTextInput] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -131,74 +93,90 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
   const [revealedCards, setRevealedCards] = useState<Record<string, boolean>>({});
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const supabase = useMemo(() => {
-    const env = (import.meta as { env?: Record<string, string> }).env || {};
-    const url = String(settings?.supabaseUrl || env.VITE_SUPABASE_URL || '').trim();
-    const key = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || '').trim();
-    if (!url || !key) return null;
+  useEffect(() => {
+    if (isOpen) {
+      setIsUnlocked(false);
+      setPinInput('');
+      setPinError('');
+      setSavedPin(getSavedPin(currentStudent));
+      try {
+        const g = localStorage.getItem(MY_GROUP_KEY);
+        if (g) setMyGroup(JSON.parse(g));
+        const b = localStorage.getItem(BLOCKED_USERS_KEY);
+        if (b) setBlockedUsers(JSON.parse(b));
+        const q = localStorage.getItem(SECRET_QUEUE_KEY);
+        if (q) setOutboxQueue(JSON.parse(q));
+      } catch {}
+    }
+  }, [isOpen, currentStudent]);
+
+  const safeStudentId = String(currentStudent?.id || 'guest_user');
+  const safeStudentName = String(
+    currentStudent?.full_name || (currentStudent as any)?.name || 'NEET Aspirant'
+  );
+  const cleanHandle = String(
+    (currentStudent as any)?.username ||
+      safeStudentName.toLowerCase().replace(/[^a-z0-9]/g, '') ||
+      'aspirant'
+  ).replace(/^@+/, '');
+  const safeUsername = `@${cleanHandle}`;
+
+  const activeChannelKey =
+    activeTab === 'dm'
+      ? activeDmChannel
+      : activeTab === 'group' && myGroup?.code
+      ? `grp_${myGroup.code}`
+      : '';
+
+  const getClient = () => {
     try {
+      const env = (import.meta as any)?.env || {};
+      const url = String(settings?.supabaseUrl || env.VITE_SUPABASE_URL || '').trim();
+      const key = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || '').trim();
+      if (!url || !key) return null;
       return createClient(url, key);
     } catch {
       return null;
     }
-  }, [settings?.supabaseUrl, settings?.supabaseAnonKey]);
-
-  useEffect(() => {
-    if (!isOpen) {
-      setIsUnlocked(false);
-      setPinInput('');
-      setPinError('');
-    }
-  }, [isOpen]);
-
-  const activeChannelKey = useMemo(() => {
-    if (activeTab === 'dm') return activeDmChannel;
-    if (activeTab === 'group' && myGroup?.code) return `grp_${myGroup.code}`;
-    return '';
-  }, [activeTab, activeDmChannel, myGroup]);
+  };
 
   useEffect(() => {
     if (!isOpen || !isUnlocked || !activeChannelKey) return;
-    let cancelled = false;
+    let active = true;
+    const localStuck = outboxQueue.filter((m) => m.channel_key === activeChannelKey);
+    const client = getClient();
 
-    const loadChannel = async () => {
-      const localStuck = outboxQueue.filter((m) => m.channel_key === activeChannelKey);
-      if (!supabase) {
-        if (!cancelled) setMessages(localStuck);
-        return;
-      }
-      try {
-        const { data } = await supabase
-          .from('secret_messages')
-          .select('*')
-          .eq('channel_key', activeChannelKey)
-          .order('created_at', { ascending: true })
-          .limit(60);
-        if (!cancelled) {
-          const serverMsgs = (Array.isArray(data) ? data : []).map((m: any) => ({
-            ...m,
-            status: 'sent' as const,
-          }));
-          setMessages([...serverMsgs, ...localStuck]);
-        }
-      } catch {
-        if (!cancelled) setMessages(localStuck);
-      }
-    };
+    if (!client) {
+      setMessages(localStuck);
+      return;
+    }
 
-    loadChannel();
+    client
+      .from('secret_messages')
+      .select('*')
+      .eq('channel_key', activeChannelKey)
+      .order('created_at', { ascending: true })
+      .limit(60)
+      .then(({ data }) => {
+        if (!active) return;
+        const rows = Array.isArray(data) ? data : [];
+        setMessages([
+          ...rows.map((r: any) => ({ ...r, status: 'sent' as const })),
+          ...localStuck,
+        ]);
+      })
+      .catch(() => {
+        if (active) setMessages(localStuck);
+      });
+
     return () => {
-      cancelled = true;
+      active = false;
     };
-  }, [isOpen, isUnlocked, activeChannelKey, supabase, outboxQueue]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [isOpen, isUnlocked, activeChannelKey, outboxQueue]);
 
   if (!isOpen) return null;
 
-  const handleVerifyOrCreatePin = (e: React.FormEvent) => {
+  const handlePinSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const clean = pinInput.trim();
     if (clean.length < 4) {
@@ -209,6 +187,7 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
       try {
         localStorage.setItem(PIN_KEY, clean);
       } catch {}
+      setSavedPin(clean);
       setIsUnlocked(true);
       setPinError('');
       return;
@@ -217,55 +196,62 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
       setIsUnlocked(true);
       setPinError('');
     } else {
-      setPinError('गलत Security PIN! कृपया अपना निजी PIN डालें।');
+      setPinError('गलत Security PIN! कृपया सही PIN डालें।');
     }
   };
 
-  const handleStartDirectChat = (e: React.FormEvent) => {
+  const handleStartDm = (e: React.FormEvent) => {
     e.preventDefault();
-    const clean = peerHandle.trim().toLowerCase().replace(/^@+/, '');
-    if (!clean) return;
-    if (blockedUsers.includes(`@${clean}`)) {
-      setPinError(`@${clean} को आपने ब्लॉक किया हुआ है। पहले Unblock करें।`);
+    const peer = peerHandle.trim().toLowerCase().replace(/^@+/, '');
+    if (!peer) return;
+    if (blockedUsers.includes(`@${peer}`)) {
+      setPinError(`@${peer} को आपने ब्लॉक किया हुआ है।`);
       return;
     }
-    const me = safeUsername.replace(/^@+/, '').toLowerCase();
-    const pair = [me, clean].sort().join('__');
+    const pair = [cleanHandle.toLowerCase(), peer].sort().join('__');
     setActiveDmChannel(`dm_${pair}`);
   };
 
-  const handleCreatePrivateGroup = (e: React.FormEvent) => {
+  const handleCreateGroup = (e: React.FormEvent) => {
     e.preventDefault();
     if (myGroup) return;
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
     const name = newGroupName.trim() || `${safeStudentName}'s NEET Study Group`;
-    const created = { code: generateSixDigitCode(), name };
+    const created = { code, name };
     setMyGroup(created);
-    safeWriteJson(MY_GROUP_KEY, created);
+    try {
+      localStorage.setItem(MY_GROUP_KEY, JSON.stringify(created));
+    } catch {}
     setNewGroupName('');
   };
 
-  const handleJoinPrivateGroup = (e: React.FormEvent) => {
+  const handleJoinGroup = (e: React.FormEvent) => {
     e.preventDefault();
     const code = joinCodeInput.trim().replace(/\D/g, '').slice(0, 6);
     if (code.length !== 6) return;
     const joined = { code, name: `Private Group #${code}` };
     setMyGroup(joined);
-    safeWriteJson(MY_GROUP_KEY, joined);
+    try {
+      localStorage.setItem(MY_GROUP_KEY, JSON.stringify(joined));
+    } catch {}
     setJoinCodeInput('');
   };
 
-  const dispatchMessage = async (draft: SecretMessageItem) => {
-    if (!supabase || !navigator.onLine) {
-      const stuckItem: SecretMessageItem = { ...draft, status: 'stuck' };
-      const nextQueue = [...outboxQueue.filter((q) => q.id !== draft.id), stuckItem];
-      setOutboxQueue(nextQueue);
-      safeWriteJson(SECRET_QUEUE_KEY, nextQueue);
-      setMessages((prev) => [...prev.filter((m) => m.id !== draft.id), stuckItem]);
+  const sendDraftMessage = async (draft: SecretMessageItem) => {
+    const client = getClient();
+    if (!client || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      const stuck: SecretMessageItem = { ...draft, status: 'stuck' };
+      const nextQ = [...outboxQueue.filter((q) => q.id !== draft.id), stuck];
+      setOutboxQueue(nextQ);
+      try {
+        localStorage.setItem(SECRET_QUEUE_KEY, JSON.stringify(nextQ));
+      } catch {}
+      setMessages((prev) => [...prev.filter((m) => m.id !== draft.id), stuck]);
       return;
     }
 
     try {
-      const { error } = await supabase.from('secret_messages').insert([
+      const { error } = await client.from('secret_messages').insert([
         {
           channel_key: draft.channel_key,
           sender_id: draft.sender_id,
@@ -278,17 +264,21 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
       ]);
       if (error) throw error;
 
-      const sentItem: SecretMessageItem = { ...draft, status: 'sent' };
-      const nextQueue = outboxQueue.filter((q) => q.id !== draft.id);
-      setOutboxQueue(nextQueue);
-      safeWriteJson(SECRET_QUEUE_KEY, nextQueue);
-      setMessages((prev) => [...prev.filter((m) => m.id !== draft.id), sentItem]);
+      const sent: SecretMessageItem = { ...draft, status: 'sent' };
+      const nextQ = outboxQueue.filter((q) => q.id !== draft.id);
+      setOutboxQueue(nextQ);
+      try {
+        localStorage.setItem(SECRET_QUEUE_KEY, JSON.stringify(nextQ));
+      } catch {}
+      setMessages((prev) => [...prev.filter((m) => m.id !== draft.id), sent]);
     } catch {
-      const stuckItem: SecretMessageItem = { ...draft, status: 'stuck' };
-      const nextQueue = [...outboxQueue.filter((q) => q.id !== draft.id), stuckItem];
-      setOutboxQueue(nextQueue);
-      safeWriteJson(SECRET_QUEUE_KEY, nextQueue);
-      setMessages((prev) => [...prev.filter((m) => m.id !== draft.id), stuckItem]);
+      const stuck: SecretMessageItem = { ...draft, status: 'stuck' };
+      const nextQ = [...outboxQueue.filter((q) => q.id !== draft.id), stuck];
+      setOutboxQueue(nextQ);
+      try {
+        localStorage.setItem(SECRET_QUEUE_KEY, JSON.stringify(nextQ));
+      } catch {}
+      setMessages((prev) => [...prev.filter((m) => m.id !== draft.id), stuck]);
     }
   };
 
@@ -302,8 +292,8 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
     }
     setSending(true);
     setTextInput('');
-    const draft: SecretMessageItem = {
-      id: `sec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    await sendDraftMessage({
+      id: `sec_${Date.now()}`,
       channel_key: activeChannelKey,
       sender_id: safeStudentId,
       sender_name: safeStudentName,
@@ -311,12 +301,22 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
       text: clean,
       status: 'sent',
       created_at: new Date().toISOString(),
-    };
-    await dispatchMessage(draft);
+    });
     setSending(false);
   };
 
-  const startVoiceRecording = async () => {
+  const stopRecording = () => {
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current);
+      recordTimerRef.current = null;
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  };
+
+  const startRecording = async () => {
     if (!activeChannelKey || isRecording) return;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -332,7 +332,7 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
         reader.onloadend = async () => {
           const base64Audio = String(reader.result || '');
           if (!base64Audio) return;
-          const draft: SecretMessageItem = {
+          await sendDraftMessage({
             id: `aud_${Date.now()}`,
             channel_key: activeChannelKey,
             sender_id: safeStudentId,
@@ -343,12 +343,10 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
             audio_duration: recordSeconds || 1,
             status: 'sent',
             created_at: new Date().toISOString(),
-          };
-          await dispatchMessage(draft);
+          });
         };
         reader.readAsDataURL(blob);
       };
-
       mediaRecorderRef.current = recorder;
       recorder.start();
       setIsRecording(true);
@@ -356,42 +354,33 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
       recordTimerRef.current = window.setInterval(() => {
         setRecordSeconds((prev) => {
           if (prev >= 15) {
-            stopVoiceRecording();
+            stopRecording();
             return 15;
           }
           return prev + 1;
         });
       }, 1000);
     } catch {
-      setPinError('माइक की अनुमति नहीं मिली। कृपया ब्राउज़र में Microphone Allow करें।');
+      setPinError('Microphone की अनुमति दें ताकि 15s Voice Note रिकॉर्ड हो सके।');
     }
   };
 
-  const stopVoiceRecording = () => {
-    if (recordTimerRef.current) {
-      clearInterval(recordTimerRef.current);
-      recordTimerRef.current = null;
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-  };
-
-  const toggleBlockHandle = (handle: string) => {
-    const normalized = `@${handle.replace(/^@+/, '').toLowerCase()}`;
-    const next = blockedUsers.includes(normalized)
-      ? blockedUsers.filter((u) => u !== normalized)
-      : [...blockedUsers, normalized];
+  const toggleBlockUser = (handle: string) => {
+    const norm = `@${handle.replace(/^@+/, '').toLowerCase()}`;
+    const next = blockedUsers.includes(norm)
+      ? blockedUsers.filter((u) => u !== norm)
+      : [...blockedUsers, norm];
     setBlockedUsers(next);
-    safeWriteJson(BLOCKED_USERS_KEY, next);
+    try {
+      localStorage.setItem(BLOCKED_USERS_KEY, JSON.stringify(next));
+    } catch {}
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm">
-      <div className="flex h-[84vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
-        {/* Top Bar */}
-        <div className="flex items-center justify-between bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border-b border-slate-800 px-4 py-3">
+      <div className="flex h-[82vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 text-slate-100 shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950 px-4 py-3">
           <div className="flex items-center gap-2">
             <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-amber-500/20 text-amber-400">
               <MessageSquareLock className="w-4 h-4" />
@@ -400,7 +389,7 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
               <h3 className="text-xs sm:text-sm font-extrabold text-white">
                 DINU SARAN • Secret Vault
               </h3>
-              <p className="text-[10px] text-slate-400">{safeUsername} • End-to-End PIN Locked</p>
+              <p className="text-[10px] text-slate-400">{safeUsername} • PIN Protected</p>
             </div>
           </div>
           <button
@@ -412,23 +401,23 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
           </button>
         </div>
 
-        {/* PIN Lock Screen */}
+        {/* PIN Screen */}
         {!isUnlocked ? (
           <form
-            onSubmit={handleVerifyOrCreatePin}
-            className="flex flex-1 flex-col items-center justify-center p-6 text-center space-y-4"
+            onSubmit={handlePinSubmit}
+            className="flex flex-1 flex-col items-center justify-center space-y-4 p-6 text-center"
           >
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/15 border border-amber-400/30 text-amber-400">
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-amber-400/30 bg-amber-500/15 text-amber-400">
               <Lock className="w-7 h-7" />
             </div>
             <div>
               <h4 className="text-base font-extrabold text-white">
-                {savedPin ? 'Enter Private Security PIN' : 'Set Your Private Security PIN'}
+                {savedPin ? 'Enter Private Security PIN' : 'Create Private Security PIN'}
               </h4>
-              <p className="mt-1 text-xs text-slate-400 max-w-xs">
+              <p className="mt-1 max-w-xs text-xs text-slate-400">
                 {savedPin
-                  ? 'Direct Chat, Voice Notes और Private Study Group खोलने के लिए अपना PIN डालें।'
-                  : 'पहली बार अपना 4-6 अंकों का निजी PIN सेट करें।'}
+                  ? 'अपनी निजी Direct Chat, Voice Notes और Study Group खोलने के लिए PIN डालें।'
+                  : 'पहली बार अपना 4-6 अंकों का Security PIN सेट करें।'}
               </p>
             </div>
             <input
@@ -439,10 +428,9 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
               onChange={(e) => setPinInput(e.target.value)}
               placeholder="••••"
               className="w-44 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-2.5 text-center text-lg font-extrabold tracking-widest text-amber-300 focus:border-amber-400 focus:outline-none"
-              autoFocus
             />
             {pinError && (
-              <p className="text-xs font-semibold text-rose-400 flex items-center gap-1">
+              <p className="flex items-center gap-1 text-xs font-semibold text-rose-400">
                 <AlertCircle className="w-3.5 h-3.5" /> {pinError}
               </p>
             )}
@@ -455,15 +443,13 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
           </form>
         ) : (
           <>
-            {/* Navigation Tabs */}
+            {/* Tabs */}
             <div className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-950/60 px-3 py-2 text-[11px] font-bold">
               <button
                 type="button"
                 onClick={() => setActiveTab('dm')}
                 className={`rounded-xl px-2.5 py-1.5 ${
-                  activeTab === 'dm'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-800 text-slate-300'
+                  activeTab === 'dm' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'
                 }`}
               >
                 Direct Chat
@@ -471,10 +457,8 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('group')}
-                className={`rounded-xl px-2.5 py-1.5 flex items-center gap-1 ${
-                  activeTab === 'group'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-800 text-slate-300'
+                className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${
+                  activeTab === 'group' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'
                 }`}
               >
                 <Users className="w-3 h-3" /> Private Group
@@ -482,10 +466,8 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('ncert')}
-                className={`rounded-xl px-2.5 py-1.5 flex items-center gap-1 ${
-                  activeTab === 'ncert'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-800 text-slate-300'
+                className={`flex items-center gap-1 rounded-xl px-2.5 py-1.5 ${
+                  activeTab === 'ncert' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300'
                 }`}
               >
                 <BookOpen className="w-3 h-3" /> NCERT Recall
@@ -494,28 +476,21 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('blocked')}
                 className={`ml-auto rounded-xl px-2 py-1.5 ${
-                  activeTab === 'blocked'
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-slate-800 text-slate-400'
+                  activeTab === 'blocked' ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-400'
                 }`}
-                title="Blocked Users"
               >
                 <Ban className="w-3.5 h-3.5" />
               </button>
             </div>
 
-            {/* Tab Content */}
             {activeTab === 'ncert' ? (
-              <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
-                <p className="text-[11px] text-slate-400">
-                  NCERT की महत्वपूर्ण पंक्तियों के रिक्त स्थान याद करें और टैप करके उत्तर जांचें:
-                </p>
+              <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
                 {NCERT_ACTIVE_RECALL_CARDS.map((card) => {
                   const shown = !!revealedCards[card.id];
                   return (
                     <div
                       key={card.id}
-                      className="rounded-2xl border border-slate-800 bg-slate-950/70 p-3 space-y-2"
+                      className="space-y-2 rounded-2xl border border-slate-800 bg-slate-950/70 p-3"
                     >
                       <div className="flex items-center justify-between text-[10px]">
                         <span className="font-bold text-emerald-400">{card.subject}</span>
@@ -530,14 +505,14 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                             उत्तर: {formatNeetExamText(card.answer)}
                           </span>
                         ) : (
-                          <span className="text-[11px] text-slate-500">उत्तर छिपा हुआ है</span>
+                          <span className="text-[11px] text-slate-500">उत्तर छिपा है</span>
                         )}
                         <button
                           type="button"
                           onClick={() =>
                             setRevealedCards((p) => ({ ...p, [card.id]: !p[card.id] }))
                           }
-                          className="inline-flex items-center gap-1 rounded-xl bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-indigo-300 hover:bg-slate-700"
+                          className="inline-flex items-center gap-1 rounded-xl bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-indigo-300"
                         >
                           {shown ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
                           {shown ? 'छिपाएं' : 'उत्तर देखें'}
@@ -548,12 +523,12 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                 })}
               </div>
             ) : activeTab === 'blocked' ? (
-              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              <div className="flex-1 space-y-2 overflow-y-auto p-4">
                 <h4 className="text-xs font-extrabold text-rose-400">
-                  आपके द्वारा ब्लॉक किए गए यूज़र्स ({blockedUsers.length})
+                  Blocked Users ({blockedUsers.length})
                 </h4>
                 {blockedUsers.length === 0 ? (
-                  <p className="text-xs text-slate-400">अभी आपने किसी को ब्लॉक नहीं किया है।</p>
+                  <p className="text-xs text-slate-400">कोई यूज़र ब्लॉक नहीं है।</p>
                 ) : (
                   blockedUsers.map((u) => (
                     <div
@@ -563,7 +538,7 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                       <span className="font-bold">{u}</span>
                       <button
                         type="button"
-                        onClick={() => toggleBlockHandle(u)}
+                        onClick={() => toggleBlockUser(u)}
                         className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white"
                       >
                         <Unlock className="w-3 h-3" /> Unblock
@@ -574,10 +549,9 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
               </div>
             ) : (
               <div className="flex flex-1 flex-col overflow-hidden">
-                {/* Channel Selector */}
                 {activeTab === 'dm' ? (
                   <form
-                    onSubmit={handleStartDirectChat}
+                    onSubmit={handleStartDm}
                     className="flex items-center gap-1.5 border-b border-slate-800 bg-slate-950/40 px-3 py-2"
                   >
                     <input
@@ -596,17 +570,16 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                     {peerHandle.trim() && (
                       <button
                         type="button"
-                        onClick={() => toggleBlockHandle(peerHandle)}
+                        onClick={() => toggleBlockUser(peerHandle)}
                         className="rounded-xl bg-rose-500/20 px-2.5 py-1.5 text-[11px] font-bold text-rose-300"
-                        title="Block/Unblock this user"
                       >
                         Block
                       </button>
                     )}
                   </form>
                 ) : !myGroup ? (
-                  <div className="p-4 space-y-3 border-b border-slate-800 bg-slate-950/40">
-                    <form onSubmit={handleCreatePrivateGroup} className="space-y-2">
+                  <div className="space-y-2.5 border-b border-slate-800 bg-slate-950/40 p-3.5">
+                    <form onSubmit={handleCreateGroup} className="space-y-1.5">
                       <p className="text-[11px] font-bold text-amber-300">
                         1 User = 1 Private Study Group (6-Digit Secret Code)
                       </p>
@@ -626,13 +599,13 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                         </button>
                       </div>
                     </form>
-                    <form onSubmit={handleJoinPrivateGroup} className="flex gap-1.5">
+                    <form onSubmit={handleJoinGroup} className="flex gap-1.5">
                       <input
                         type="text"
                         maxLength={6}
                         value={joinCodeInput}
                         onChange={(e) => setJoinCodeInput(e.target.value)}
-                        placeholder="6-अंकों का कोड डालकर जुड़ें..."
+                        placeholder="6-अंकों का कोड डालें..."
                         className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white"
                       />
                       <button
@@ -655,7 +628,9 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                       type="button"
                       onClick={() => {
                         setMyGroup(null);
-                        localStorage.removeItem(MY_GROUP_KEY);
+                        try {
+                          localStorage.removeItem(MY_GROUP_KEY);
+                        } catch {}
                       }}
                       className="text-[10px] text-rose-400 hover:underline"
                     >
@@ -664,15 +639,14 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                   </div>
                 )}
 
-                {/* Messages Area */}
-                <div className="flex-1 overflow-y-auto p-3.5 space-y-2.5">
+                <div className="flex-1 space-y-2.5 overflow-y-auto p-3.5">
                   {!activeChannelKey ? (
-                    <div className="flex h-full items-center justify-center text-center text-xs text-slate-400 p-4">
+                    <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
                       ऊपर दोस्त का @username डालें या अपना 6-Digit Private Study Group खोलें।
                     </div>
                   ) : messages.length === 0 ? (
-                    <div className="flex h-full items-center justify-center text-center text-xs text-slate-400 p-4">
-                      यह एन्क्रिप्टेड प्राइवेट चैट खाली है। पहला संदेश या 15-सेकंड का Voice Note भेजें!
+                    <div className="flex h-full items-center justify-center p-4 text-center text-xs text-slate-400">
+                      पहला संदेश या 15-सेकंड का Voice Note भेजें!
                     </div>
                   ) : (
                     messages.map((m) => {
@@ -680,7 +654,7 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                       return (
                         <div
                           key={m.id}
-                          className={`flex flex-col max-w-[84%] ${
+                          className={`flex max-w-[84%] flex-col ${
                             mine ? 'ml-auto items-end' : 'mr-auto items-start'
                           }`}
                         >
@@ -690,8 +664,8 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                           <div
                             className={`rounded-2xl px-3 py-2 text-xs ${
                               mine
-                                ? 'bg-indigo-600 text-white rounded-tr-sm'
-                                : 'bg-slate-800 text-slate-100 rounded-tl-sm'
+                                ? 'rounded-tr-sm bg-indigo-600 text-white'
+                                : 'rounded-tl-sm bg-slate-800 text-slate-100'
                             }`}
                           >
                             {m.audio_data ? (
@@ -709,8 +683,8 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                               <span>⏳ Stuck (Offline)</span>
                               <button
                                 type="button"
-                                onClick={() => dispatchMessage(m)}
-                                className="inline-flex items-center gap-0.5 rounded bg-amber-500/20 px-1.5 py-0.5 font-bold hover:bg-amber-500/30"
+                                onClick={() => sendDraftMessage(m)}
+                                className="inline-flex items-center gap-0.5 rounded bg-amber-500/20 px-1.5 py-0.5 font-bold"
                               >
                                 <RotateCcw className="w-2.5 h-2.5" /> Retry Send
                               </button>
@@ -723,7 +697,6 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                   <div ref={bottomRef} />
                 </div>
 
-                {/* Input Bar */}
                 {activeChannelKey && (
                   <form
                     onSubmit={handleSendText}
@@ -731,13 +704,12 @@ export const SecretDirectChatModal: React.FC<SecretDirectChatModalProps> = ({
                   >
                     <button
                       type="button"
-                      onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+                      onClick={isRecording ? stopRecording : startRecording}
                       className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${
                         isRecording
-                          ? 'bg-rose-600 text-white animate-pulse'
-                          : 'bg-slate-800 text-slate-300 hover:text-amber-400'
+                          ? 'animate-pulse bg-rose-600 text-white'
+                          : 'bg-slate-800 text-slate-300'
                       }`}
-                      title={isRecording ? 'Stop Voice Note' : 'Record 15s Voice Note'}
                     >
                       {isRecording ? <Square className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                     </button>
