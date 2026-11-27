@@ -76,7 +76,10 @@ export type ViewRoute =
   | 'mistakes'
   | 'backup'
   | 'suggestions'
-  | 'reports';
+  | 'reports'
+  | 'leaderboard'
+  | 'study-vault';
+
 
 export interface ChapterItem {
   id: string;
@@ -352,4 +355,34 @@ export interface BackupPayload {
     quizHistory: QuizResultSummary[];
     customSubjects: string[];
   };
+
+  export interface StudentProfile {
+  id: string;
+  full_name: string;
+  gender: 'Male' | 'Female' | 'Other';
+  dob: string;
+  attempt_status: 'Fresher (12th)' | '1st Drop' | '2nd Drop' | '3rd+ Drop';
+  mobile_number?: string;
+  total_attempted: number;
+  total_correct: number;
+  total_wrong: number;
+  total_time_seconds: number;
+  leaderboard_score: number;
+}
+
+export interface StudyVaultFolder {
+  id: string;
+  name: string;
+  description?: string;
+  created_at?: string;
+}
+
+export interface StudyVaultLink {
+  id: string;
+  folder_id: string;
+  title: string;
+  url: string;
+  created_at?: string;
+}
+
 }
