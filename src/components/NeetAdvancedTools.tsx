@@ -572,3 +572,23 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
     </div>
   );
 };
+export const NeetCountdownAndFreezeBar: React.FC<any> = () => {
+  const targetDate = new Date('2027-05-02T14:00:00+05:30').getTime();
+  const daysLeft = Math.max(0, Math.ceil((targetDate - Date.now()) / (1000 * 60 * 60 * 24)));
+
+  return (
+    <div className="px-3.5 py-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex flex-wrap items-center justify-between gap-2 text-xs">
+      <span className="font-bold text-[#0F172A] dark:text-[#F1F5F9]">
+        🎯 NEET UG 2027 Countdown: <span className="text-[#6366F1] font-mono-num">{daysLeft} Days Left</span>
+      </span>
+      <span className="text-[11px] text-[#64748B]">
+        NCERT Line-by-Line • Active Recall • Zero-Lag Exam Mode
+      </span>
+    </div>
+  );
+};
+
+export const SmartRevisionAndOmrWidget: React.FC<any> = (props) => {
+  return <NeetAdvancedTools {...props} />;
+};
+
