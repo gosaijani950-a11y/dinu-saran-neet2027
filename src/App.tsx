@@ -1595,13 +1595,58 @@ void studentFeatures.recordQuizInLeaderboard(summary);
               }
             } catch {}
           }}
-          onStartLiveAttempt={(qs, cfg) => {
+                    onStartLiveAttempt={(qs, cfg) => {
             try {
-              if (typeof handlePracticeCustomPool === 'function') {
-                handlePracticeCustomPool(qs, `${cfg.title} • ${cfg.quizType} (${cfg.durationMins}m)`);
+              const safeQs = (Array.isArray(qs) ? qs : []).map((item: any, idx: number) => {
+                const rawSubj = String(item?.subject || 'Botany');
+                const normSubj =
+                  rawSubj === 'Physics' || rawSubj === 'Chemistry' || rawSubj === 'Botany' || rawSubj === 'Zoology'
+                    ? rawSubj
+                    : 'Botany';
+                const optsHi = Array.isArray(item?.options_hi) && item.options_hi.length === 4
+                  ? item.options_hi
+                  : ['विकल्प A', 'विकल्प B', 'विकल्प C', 'विकल्प D'];
+                const optsEn = Array.isArray(item?.options_en) && item.options_en.length === 4
+                  ? item.options_en
+                  : ['Option A', 'Option B', 'Option C', 'Option D'];
+                const corrIdx =
+                  typeof item?.correctIndex === 'number' && item.correctIndex >= 0 && item.correctIndex <= 3
+                    ? item.correctIndex
+                    : 0;
+
+                return {
+                  ...item,
+                  id: String(item?.id || `local_live_${Date.now()}_${idx}`),
+                  subject: normSubj,
+                  chapter: String(item?.chapter || 'General'),
+                  topic: String(item?.topic || 'Custom AI'),
+                  difficulty: item?.difficulty === 'Easy' || item?.difficulty === 'Hard' ? item.difficulty : 'Medium',
+                  question_hi: String(item?.question_hi || item?.question_en || `प्रश्न ${idx + 1}`),
+                  question_en: String(item?.question_en || item?.question_hi || `Question ${idx + 1}`),
+                  options_hi: optsHi,
+                  options_en: optsEn,
+                  correctIndex: corrIdx,
+                  explanation_hi: String(item?.explanation_hi || 'सही विकल्प चुनें।'),
+                  explanation_en: String(item?.explanation_en || 'Select the right option.'),
+                };
+              });
+
+              if (safeQs.length > 0 && typeof handlePracticeCustomPool === 'function') {
+                handlePracticeCustomPool(
+                  safeQs as MCQQuestion[],
+                  `${cfg.title} • ${cfg.quizType} (${cfg.durationMins}m)`
+                );
               }
-            } catch {}
+            } catch (err) {
+              console.error('Live attempt launch error:', err);
+              try {
+                if (typeof showToast === 'function') {
+                  showToast('लाइव क्विज़ शुरू करने में दिक्कत आई, कृपया दोबारा प्रयास करें।', 'error');
+                }
+              } catch {}
+            }
           }}
+
         />
       )}
 
