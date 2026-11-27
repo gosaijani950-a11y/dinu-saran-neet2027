@@ -92,6 +92,9 @@ import { LeaderboardView } from './components/LeaderboardView';
 import { StudyVaultView } from './components/StudyVaultView';
 import { FloatingAiAssistant } from './components/FloatingAiAssistant';
 import { CommunityChatView } from './components/CommunityChatView';
+import { Flame, ArrowLeft } from 'lucide-react';
+import { GlobalSafeErrorBoundary, formatNeetExamText } from './utils/neetEngine';
+import { SecretDirectChatModal } from './components/SecretDirectChatModal';
 
 const DEFAULT_QUIZ_CONFIG: QuizConfig = {
   subject: 'All',
