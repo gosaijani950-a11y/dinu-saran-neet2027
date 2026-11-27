@@ -68,25 +68,84 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
   onSubmitQuiz,
   onToast,
 }) => {
-  const [answers, setAnswers] = useState<Record<string, number>>(initialAnswers);
+  // Ultra-Safe Normalization layer: guarantees zero undefined/null crashes regardless of question source
+  const safeQuestions = useMemo(() => {
+    const rawList = Array.isArray(questions) ? questions : [];
+    return rawList
+      .filter((item): item is MCQQuestion => Boolean(item && typeof item === 'object'))
+      .map((item: any, idx: number): MCQQuestion => {
+        const rawOptsHi = Array.isArray(item.options_hi) ? item.options_hi : [];
+        const optionsHi = [0, 1, 2, 3].map((i) =>
+          String(rawOptsHi[i] ?? item.options_en?.[i] ?? `विकल्प ${OPTION_LABELS[i]}`)
+        );
+
+        const rawOptsEn = Array.isArray(item.options_en) ? item.options_en : [];
+        const optionsEn = [0, 1, 2, 3].map((i) =>
+          String(rawOptsEn[i] ?? optionsHi[i] ?? `Option ${OPTION_LABELS[i]}`)
+        );
+
+        const rawCorrect =
+          typeof item.correct_index === 'number'
+            ? item.correct_index
+            : typeof item.correctIndex === 'number'
+            ? item.correctIndex
+            : 0;
+        const safeCorrect =
+          Number.isFinite(rawCorrect) && rawCorrect >= 0 && rawCorrect <= 3 ? rawCorrect : 0;
+
+        const safeTags = Array.isArray(item.tags)
+          ? item.tags.map((t: any) => String(t)).filter(Boolean)
+          : item.topic
+          ? [String(item.topic)]
+          : [];
+
+        return {
+          ...item,
+          id: String(item.id || `quiz_q_${idx}`),
+          subject: item.subject || 'Botany',
+          chapter: String(item.chapter || 'General'),
+          difficulty: item.difficulty || 'Medium',
+          question_hi: String(item.question_hi || item.question_en || `प्रश्न ${idx + 1}`),
+          question_en: String(item.question_en || item.question_hi || `Question ${idx + 1}`),
+          options_hi: optionsHi,
+          options_en: optionsEn,
+          correct_index: safeCorrect,
+          explanation_hi: String(item.explanation_hi || item.explanation_en || 'सही विकल्प का चयन करें।'),
+          explanation_en: String(item.explanation_en || item.explanation_hi || 'Select the correct option.'),
+          tags: safeTags,
+          isStarred: Boolean(item.isStarred),
+          isSaved: Boolean(item.isSaved),
+        };
+      });
+  }, [questions]);
+
+  const safeInitialAnswers = useMemo(
+    () => (initialAnswers && typeof initialAnswers === 'object' ? initialAnswers : {}),
+    [initialAnswers]
+  );
+
+  const [answers, setAnswers] = useState<Record<string, number>>(safeInitialAnswers);
   const [lockedQuestions, setLockedQuestions] = useState<Record<string, boolean>>(() => {
-    if (config.revealMode !== 'practice') return {};
+    if (config?.revealMode !== 'practice') return {};
     const initialLocked: Record<string, boolean> = {};
-    for (const qId of Object.keys(initialAnswers)) {
+    for (const qId of Object.keys(safeInitialAnswers)) {
       initialLocked[qId] = true;
     }
     return initialLocked;
   });
-  const [currentIndex, setCurrentIndex] = useState(
-    Math.min(Math.max(0, initialIndex), Math.max(0, questions.length - 1))
+
+  const [currentIndex, setCurrentIndex] = useState(() =>
+    Math.min(Math.max(0, Number(initialIndex) || 0), Math.max(0, safeQuestions.length - 1))
   );
-  const [layoutMode, setLayoutMode] = useState<QuizLayoutMode>(config.layoutMode);
-  const [remainingSeconds, setRemainingSeconds] = useState(initialRemainingSeconds);
+  const [layoutMode, setLayoutMode] = useState<QuizLayoutMode>(config?.layoutMode || 'scroll');
+  const [remainingSeconds, setRemainingSeconds] = useState(
+    Math.max(0, Number(initialRemainingSeconds) || 900)
+  );
   const [paused, setPaused] = useState(false);
   const [hasSubmitted, setHasSubmitted] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [navFilter, setNavFilter] = useState<'all' | 'answered' | 'unanswered' | 'saved' | 'starred'>('all');
-  const [scrollPage, setScrollPage] = useState(Math.floor(initialIndex / PAGE_SIZE));
+  const [scrollPage, setScrollPage] = useState(Math.floor((Number(initialIndex) || 0) / PAGE_SIZE));
   const [navPage, setNavPage] = useState(0);
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
 
@@ -109,14 +168,21 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
   submitRef.current = onSubmitQuiz;
   checkpointRef.current = onCheckpointUpdate;
 
-  const isRunning = questions.length > 0 && !hasSubmitted;
+  // Keep currentIndex within bounds if safeQuestions changes dynamically
+  useEffect(() => {
+    if (safeQuestions.length > 0 && currentIndex >= safeQuestions.length) {
+      setCurrentIndex(safeQuestions.length - 1);
+    }
+  }, [safeQuestions.length, currentIndex]);
+
+  const isRunning = safeQuestions.length > 0 && !hasSubmitted;
   const isPaused = paused;
-  const isUntimed = config.untimed;
+  const isUntimed = Boolean(config?.untimed);
 
   const answeredCount = useMemo(() => Object.keys(answers).length, [answers]);
-  const totalPages = Math.max(1, Math.ceil(questions.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(safeQuestions.length / PAGE_SIZE));
   const progressPercent =
-    questions.length > 0 ? Math.min(100, Math.round((answeredCount / questions.length) * 100)) : 0;
+    safeQuestions.length > 0 ? Math.min(100, Math.round((answeredCount / safeQuestions.length) * 100)) : 0;
 
   // Countdown timer: depends ONLY on [isRunning, isPaused, isUntimed] — never resets on answer clicks
   useEffect(() => {
@@ -132,33 +198,46 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
     if (!isUntimed && isRunning && remainingSeconds === 0 && !autoSubmittedRef.current) {
       autoSubmittedRef.current = true;
       setHasSubmitted(true);
-      submitRef.current(answersRef.current, 'auto');
+      try {
+        submitRef.current(answersRef.current, 'auto');
+      } catch (err) {
+        console.error('Auto submit error:', err);
+      }
     }
   }, [remainingSeconds, isUntimed, isRunning]);
 
   // Auto-checkpoint immediately on answer, index, or pause state changes
   useEffect(() => {
-    if (hasSubmitted || questions.length === 0) return;
-    checkpointRef.current(answers, currentIndex, remainingSecondsRef.current);
-  }, [answers, currentIndex, paused, hasSubmitted, questions.length]);
+    if (hasSubmitted || safeQuestions.length === 0) return;
+    try {
+      checkpointRef.current(answers, currentIndex, remainingSecondsRef.current);
+    } catch (err) {
+      console.error('Checkpoint error:', err);
+    }
+  }, [answers, currentIndex, paused, hasSubmitted, safeQuestions.length]);
 
   // Periodic checkpoint every 5 seconds during active timed countdown to prevent timer drift on reload
   useEffect(() => {
     if (!isRunning || isPaused || isUntimed) return;
     const checkpointInterval = window.setInterval(() => {
-      checkpointRef.current(
-        answersRef.current,
-        currentIndexRef.current,
-        remainingSecondsRef.current
-      );
+      try {
+        checkpointRef.current(
+          answersRef.current,
+          currentIndexRef.current,
+          remainingSecondsRef.current
+        );
+      } catch (err) {
+        console.error('Periodic checkpoint error:', err);
+      }
     }, 5000);
     return () => window.clearInterval(checkpointInterval);
   }, [isRunning, isPaused, isUntimed]);
 
   const handleSelectOption = (question: MCQQuestion, optIndex: number) => {
-    if (paused || hasSubmitted) return;
+    if (paused || hasSubmitted || !question) return;
+
     // In Practice (Instant) Mode, lock immediately after first answer so user cannot change wrong to green
-    if (config.revealMode === 'practice') {
+    if (config?.revealMode === 'practice') {
       if (lockedQuestions[question.id] || answers[question.id] !== undefined) {
         return;
       }
@@ -167,7 +246,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
 
     setAnswers((prev) => ({ ...prev, [question.id]: optIndex }));
 
-    if (config.revealMode === 'practice' && optIndex !== question.correct_index) {
+    if (config?.revealMode === 'practice' && optIndex !== question.correct_index) {
       setWrongShakeId(`${question.id}-${optIndex}`);
       window.setTimeout(() => setWrongShakeId(null), 320);
     }
@@ -175,7 +254,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
 
   const handleClearChoice = (questionId: string) => {
     // Only allow clearing choice in Exam Mode (never in Practice Mode once locked)
-    if (config.revealMode === 'practice' || lockedQuestions[questionId]) return;
+    if (config?.revealMode === 'practice' || lockedQuestions[questionId]) return;
     setAnswers((prev) => {
       const next = { ...prev };
       delete next[questionId];
@@ -184,20 +263,22 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
   };
 
   const handleJumpToQuestion = (index: number) => {
-    setCurrentIndex(index);
-    const targetPage = Math.floor(index / PAGE_SIZE);
+    const bounded = Math.min(Math.max(0, index), Math.max(0, safeQuestions.length - 1));
+    setCurrentIndex(bounded);
+    const targetPage = Math.floor(bounded / PAGE_SIZE);
     setScrollPage(targetPage);
     setNavOpen(false);
     if (layoutMode === 'scroll') {
       window.setTimeout(() => {
-        const el = document.getElementById(`quiz-card-${index}`);
+        const el = document.getElementById(`quiz-card-${bounded}`);
         el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 60);
     }
   };
 
   const handleAskDeeperAI = async (question: MCQQuestion) => {
-    if (!settings.apiKey.trim()) {
+    const key = String(settings?.apiKey || '').trim();
+    if (!key) {
       onToast('Add your Gemini API key in Settings (⚙️) to use Ask AI Deeper Explanation.', 'error');
       return;
     }
@@ -219,8 +300,8 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
 
   const filteredNavIndices = useMemo(() => {
     const out: number[] = [];
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
+    for (let i = 0; i < safeQuestions.length; i++) {
+      const q = safeQuestions[i];
       const isAns = answers[q.id] !== undefined;
       if (navFilter === 'answered' && !isAns) continue;
       if (navFilter === 'unanswered' && isAns) continue;
@@ -229,30 +310,35 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
       out.push(i);
     }
     return out;
-  }, [questions, answers, navFilter]);
+  }, [safeQuestions, answers, navFilter]);
 
   const scrollSliceStart = scrollPage * PAGE_SIZE;
   const scrollSlice = useMemo(
-    () => questions.slice(scrollSliceStart, scrollSliceStart + PAGE_SIZE),
-    [questions, scrollSliceStart]
+    () => safeQuestions.slice(scrollSliceStart, scrollSliceStart + PAGE_SIZE),
+    [safeQuestions, scrollSliceStart]
   );
 
-  const activeSingleQuestion = questions[currentIndex] ?? questions[0];
+  const activeSingleQuestion = safeQuestions[currentIndex] ?? safeQuestions[0];
   const singleQuestionAnswered = activeSingleQuestion
     ? answers[activeSingleQuestion.id] !== undefined
     : false;
   const singleQuestionLocked = activeSingleQuestion
-    ? config.revealMode === 'practice' &&
+    ? config?.revealMode === 'practice' &&
       (Boolean(lockedQuestions[activeSingleQuestion.id]) || singleQuestionAnswered)
     : false;
 
   const renderQuestionCard = (q: MCQQuestion, globalIdx: number) => {
+    if (!q) return null;
     const selected = answers[q.id];
     const hasAnswered = selected !== undefined;
     const isPracticeLocked =
-      config.revealMode === 'practice' && (Boolean(lockedQuestions[q.id]) || hasAnswered);
+      config?.revealMode === 'practice' && (Boolean(lockedQuestions[q.id]) || hasAnswered);
     const isPracticeRevealed = isPracticeLocked;
     const deeperText = aiExplanations[q.id];
+    const safeTags = Array.isArray(q.tags) ? q.tags : [];
+    const safeOptions = Array.isArray(q.options_hi) && q.options_hi.length > 0
+      ? q.options_hi
+      : ['विकल्प A', 'विकल्प B', 'विकल्प C', 'विकल्प D'];
 
     return (
       <article
@@ -272,7 +358,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
             <span className="truncate max-w-[180px] sm:max-w-[260px]">{q.chapter}</span>
             <span aria-hidden="true">·</span>
             <span>{q.difficulty}</span>
-            {q.tags.slice(0, 1).map((tag) => (
+            {safeTags.slice(0, 1).map((tag) => (
               <React.Fragment key={tag}>
                 <span aria-hidden="true">·</span>
                 <span className="text-indigo-600 dark:text-indigo-400 font-medium">{tag}</span>
@@ -325,12 +411,12 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
 
         {/* Crisp Hindi Question Stem (WCAG AAA #F1F5F9 on #141923, leading-[1.65]) */}
         <div className="font-hindi text-[15px] sm:text-[16px] font-semibold text-[#0F172A] dark:text-[#F1F5F9] leading-[1.65]">
-          <MathText text={q.question_hi} />
+          <MathText text={q.question_hi || ''} />
         </div>
 
         {/* 4 Compact Option Rows (Single-Viewport Fit) */}
         <div className="space-y-2 mt-3">
-          {q.options_hi.map((opt, optIdx) => {
+          {safeOptions.map((opt, optIdx) => {
             const isSelected = selected === optIdx;
             const isCorrect = q.correct_index === optIdx;
             const isShaking = wrongShakeId === `${q.id}-${optIdx}`;
@@ -346,8 +432,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                   'bg-emerald-500/12 border-emerald-500/50 text-emerald-950 dark:text-emerald-100';
                 badgeClass = 'bg-[#10B981] border-[#10B981] text-white';
               } else if (isSelected && !isCorrect) {
-                stateClass =
-                  'bg-rose-500/12 border-rose-500/50 text-rose-950 dark:text-rose-100';
+                stateClass = 'bg-rose-500/12 border-rose-500/50 text-rose-950 dark:text-rose-100';
                 badgeClass = 'bg-[#F43F5E] border-[#F43F5E] text-white';
               }
             } else if (isSelected) {
@@ -371,10 +456,10 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                 <span
                   className={`w-6 h-6 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 mt-0.5 transition-colors ${badgeClass}`}
                 >
-                  {OPTION_LABELS[optIdx]}
+                  {OPTION_LABELS[optIdx] || String(optIdx + 1)}
                 </span>
                 <span className="flex-1 font-hindi text-[14px] sm:text-[15px] leading-[1.6]">
-                  <MathText text={opt} />
+                  <MathText text={String(opt ?? '')} />
                 </span>
                 {isPracticeRevealed && isCorrect && (
                   <motion.span
@@ -423,7 +508,9 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                   ) : (
                     <>
                       <XCircle className="w-3.5 h-3.5" />
-                      <span>Wrong · Correct Option: {OPTION_LABELS[q.correct_index]}</span>
+                      <span>
+                        Wrong · Correct Option: {OPTION_LABELS[q.correct_index] || 'A'}
+                      </span>
                     </>
                   )}
                 </span>
@@ -444,7 +531,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
               </div>
 
               <div className="font-hindi text-[13px] sm:text-sm text-[#0F172A] dark:text-[#F1F5F9]/90 leading-[1.65]">
-                <MathText text={q.explanation_hi} />
+                <MathText text={q.explanation_hi || ''} />
               </div>
 
               {deeperText && (
@@ -462,21 +549,33 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
         </AnimatePresence>
 
         {/* Scroll-View Exam Mode Clear Choice Row */}
-        {layoutMode === 'scroll' && hasAnswered && config.revealMode === 'exam' && !isPracticeLocked && (
+        {layoutMode === 'scroll' && hasAnswered && config?.revealMode === 'exam' && !isPracticeLocked && (
           <div className="flex items-center justify-end pt-0.5">
             <button
               type="button"
               onClick={() => handleClearChoice(q.id)}
               className="h-7 px-2.5 rounded-lg text-[11px] font-medium text-[#64748B] hover:text-[#0F172A] dark:hover:text-[#F1F5F9] hover:bg-[#F4F6FA] dark:hover:bg-[#1C2331] inline-flex items-center gap-1 cursor-pointer"
             >
-              <Eraser className="w-3 h-3" />
-              Clear Choice
+              <Eraser className="w-3 h-3" /> Clear Choice
             </button>
           </div>
         )}
       </article>
     );
   };
+
+  if (safeQuestions.length === 0) {
+    return (
+      <div className="bg-white dark:bg-[#141923] rounded-2xl border border-slate-200 dark:border-white/[0.06] p-8 text-center space-y-2">
+        <p className="text-sm font-bold text-[#0F172A] dark:text-[#F1F5F9]">
+          No Questions Loaded
+        </p>
+        <p className="text-xs text-[#64748B]">
+          Please generate or select questions to start the live quiz session.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3 pb-6">
@@ -486,13 +585,17 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
           {/* Left: Question Counter + Live Tabular Timer */}
           <div className="flex items-center gap-2 text-xs font-semibold">
             <span className="font-mono-num text-[#6366F1] dark:text-indigo-400">
-              Q {layoutMode === 'single' ? currentIndex + 1 : `${scrollSliceStart + 1}–${Math.min(questions.length, scrollSliceStart + PAGE_SIZE)}`}/{questions.length}
+              Q{' '}
+              {layoutMode === 'single'
+                ? currentIndex + 1
+                : `${scrollSliceStart + 1}–${Math.min(safeQuestions.length, scrollSliceStart + PAGE_SIZE)}`}
+              /{safeQuestions.length}
             </span>
             <span className="text-slate-300 dark:text-white/10 hidden xs:inline">|</span>
             <span className="font-mono-num text-[#475569] dark:text-[#94A3B8] hidden xs:inline">
-              {answeredCount}/{questions.length}
+              {answeredCount}/{safeQuestions.length}
             </span>
-            {!config.untimed && (
+            {!isUntimed && (
               <span
                 className={`font-mono-num inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold ${
                   remainingSeconds <= 60
@@ -508,7 +611,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
 
           {/* Right: Pause, Layout Segmented Toggle, Grid, Subtle Rose Submit */}
           <div className="flex items-center gap-1.5">
-            {!config.untimed && (
+            {!isUntimed && (
               <button
                 type="button"
                 onClick={() => setPaused((p) => !p)}
@@ -567,7 +670,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
       </div>
 
       {/* Background Streaming Indicator */}
-      {batchProgress.status === 'running' && (
+      {batchProgress?.status === 'running' && (
         <div className="px-3 py-2 rounded-xl bg-indigo-500/10 border border-indigo-500/25 text-xs font-medium text-indigo-700 dark:text-indigo-300 flex items-center gap-2">
           <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
           <span className="font-mono-num">
@@ -588,18 +691,17 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
             onClick={() => setPaused(false)}
             className="h-9 px-4 rounded-xl bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            Resume Quiz
+            <Play className="w-3.5 h-3.5 fill-current" /> Resume Quiz
           </button>
         </div>
       )}
 
       {/* Main Question Body */}
-      {!paused && questions.length > 0 && (
+      {!paused && safeQuestions.length > 0 && (
         <>
           {layoutMode === 'single' ? (
             <>
-              {renderQuestionCard(activeSingleQuestion, currentIndex)}
+              {activeSingleQuestion && renderQuestionCard(activeSingleQuestion, currentIndex)}
 
               {/* Sticky Bottom Action Bar (Single-Question View — Fitts's Law Thumb Zone) */}
               <div className="sticky bottom-0 z-20 -mx-3 sm:-mx-4 px-3 sm:px-4 py-2.5 backdrop-blur-xl bg-[#F4F6FA]/92 dark:bg-[#0B0E14]/92 border-t border-slate-200/80 dark:border-white/[0.06] flex items-center justify-between gap-2">
@@ -609,8 +711,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                   onClick={() => setCurrentIndex((i) => Math.max(0, i - 1))}
                   className="h-9 px-3.5 rounded-xl bg-white dark:bg-[#141923] border border-slate-200 dark:border-white/[0.08] text-[#0F172A] dark:text-[#F1F5F9] text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-35 cursor-pointer"
                 >
-                  <ChevronLeft className="w-4 h-4" />
-                  Back
+                  <ChevronLeft className="w-4 h-4" /> Back
                 </button>
 
                 <button
@@ -618,25 +719,23 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                   disabled={
                     !activeSingleQuestion ||
                     !singleQuestionAnswered ||
-                    config.revealMode === 'practice' ||
+                    config?.revealMode === 'practice' ||
                     singleQuestionLocked
                   }
                   onClick={() => activeSingleQuestion && handleClearChoice(activeSingleQuestion.id)}
                   className="h-9 px-3 rounded-xl text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-[#F1F5F9] hover:bg-[#EEF2F7] dark:hover:bg-[#1C2331] text-xs font-medium inline-flex items-center gap-1 disabled:opacity-30 cursor-pointer"
                 >
-                  <Eraser className="w-3.5 h-3.5" />
-                  Clear
+                  <Eraser className="w-3.5 h-3.5" /> Clear
                 </button>
 
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.98 }}
-                  disabled={currentIndex >= questions.length - 1}
-                  onClick={() => setCurrentIndex((i) => Math.min(questions.length - 1, i + 1))}
+                  disabled={currentIndex >= safeQuestions.length - 1}
+                  onClick={() => setCurrentIndex((i) => Math.min(safeQuestions.length - 1, i + 1))}
                   className="h-9 px-4 rounded-xl bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold inline-flex items-center gap-1 disabled:opacity-35 cursor-pointer"
                 >
-                  Next
-                  <ChevronRight className="w-4 h-4" />
+                  Next <ChevronRight className="w-4 h-4" />
                 </motion.button>
               </div>
             </>
@@ -647,7 +746,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
                   {Array.from({ length: totalPages }).map((_, pIdx) => {
                     const start = pIdx * PAGE_SIZE + 1;
-                    const end = Math.min(questions.length, (pIdx + 1) * PAGE_SIZE);
+                    const end = Math.min(safeQuestions.length, (pIdx + 1) * PAGE_SIZE);
                     return (
                       <button
                         key={pIdx}
@@ -681,7 +780,8 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                     }}
                     className="h-9 px-4 rounded-xl bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold cursor-pointer"
                   >
-                    Load Next 50 Questions ({(scrollPage + 1) * PAGE_SIZE + 1}–{Math.min(questions.length, (scrollPage + 2) * PAGE_SIZE)}) →
+                    Load Next 50 Questions ({(scrollPage + 1) * PAGE_SIZE + 1}–
+                    {Math.min(safeQuestions.length, (scrollPage + 2) * PAGE_SIZE)}) →
                   </button>
                 </div>
               )}
@@ -693,7 +793,12 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
       {/* Compact Paginated Question Navigator Drawer */}
       <AnimatePresence>
         {navOpen && (
-          <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label="Question Navigator">
+          <div
+            className="fixed inset-0 z-50 flex justify-end"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Question Navigator"
+          >
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -714,7 +819,7 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                     Question Navigator
                   </h2>
                   <p className="text-[11px] font-mono-num text-[#64748B]">
-                    {answeredCount} of {questions.length} answered
+                    {answeredCount} of {safeQuestions.length} answered
                   </p>
                 </div>
                 <button
@@ -770,7 +875,8 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                               : 'bg-[#EEF2F7] dark:bg-[#0E121B] text-[#64748B]'
                           }`}
                         >
-                          {pIdx * PAGE_SIZE + 1}–{Math.min(filteredNavIndices.length, (pIdx + 1) * PAGE_SIZE)}
+                          {pIdx * PAGE_SIZE + 1}–
+                          {Math.min(filteredNavIndices.length, (pIdx + 1) * PAGE_SIZE)}
                         </button>
                       )
                     )}
@@ -783,7 +889,8 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                   {filteredNavIndices
                     .slice(navPage * PAGE_SIZE, (navPage + 1) * PAGE_SIZE)
                     .map((qIdx) => {
-                      const q = questions[qIdx];
+                      const q = safeQuestions[qIdx];
+                      if (!q) return null;
                       const isAns = answers[q.id] !== undefined;
                       const isCurr = qIdx === currentIndex;
                       return (
@@ -801,12 +908,15 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                         >
                           {qIdx + 1}
                           {q.isStarred && (
-                            <span className="absolute top-0.5 right-0.5 text-[8px] text-[#F59E0B]">★</span>
+                            <span className="absolute top-0.5 right-0.5 text-[8px] text-[#F59E0B]">
+                              ★
+                            </span>
                           )}
                         </button>
                       );
                     })}
                 </div>
+
                 {filteredNavIndices.length === 0 && (
                   <p className="py-8 text-center text-xs text-[#64748B]">
                     No questions match this filter.
@@ -845,8 +955,15 @@ export const ActiveQuiz: React.FC<ActiveQuizProps> = ({
                 Submit Quiz?
               </h2>
               <p className="text-xs text-[#475569] dark:text-[#94A3B8] leading-relaxed">
-                You have answered <strong className="font-mono-num text-[#0F172A] dark:text-[#F1F5F9]">{answeredCount}</strong> of{' '}
-                <strong className="font-mono-num text-[#0F172A] dark:text-[#F1F5F9]">{questions.length}</strong> questions. Submit now to view your performance &amp; answer key?
+                You have answered{' '}
+                <strong className="font-mono-num text-[#0F172A] dark:text-[#F1F5F9]">
+                  {answeredCount}
+                </strong>{' '}
+                of{' '}
+                <strong className="font-mono-num text-[#0F172A] dark:text-[#F1F5F9]">
+                  {safeQuestions.length}
+                </strong>{' '}
+                questions. Submit now to view your performance &amp; answer key?
               </p>
               <div className="flex items-center justify-end gap-2 pt-1">
                 <button
