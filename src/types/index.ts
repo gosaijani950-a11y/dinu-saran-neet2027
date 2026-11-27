@@ -77,8 +77,10 @@ export type ViewRoute =
   | 'backup'
   | 'suggestions'
   | 'reports'
-  | 'leaderboard'
-  | 'study-vault';
+| 'leaderboard'
+| 'study-vault'
+| 'community';
+
 
 
 export interface ChapterItem {
