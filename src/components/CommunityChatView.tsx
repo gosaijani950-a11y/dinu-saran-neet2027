@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import { Send, Bot, Sparkles, Users, Loader2, RefreshCw } from 'lucide-react';
-import { supabase } from '../lib/supabaseClient';
 import type { AppSettings, StudentProfile } from '../types';
 
 export interface CommunityMessage {
@@ -32,7 +32,20 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
+  const supabase = useMemo(() => {
+    const env = (import.meta as { env?: Record<string, string> }).env || {};
+    const url = (settings.supabaseUrl || env.VITE_SUPABASE_URL || '').trim();
+    const key = (settings.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || '').trim();
+    if (!url || !key) return null;
+    return createClient(url, key);
+  }, [settings.supabaseUrl, settings.supabaseAnonKey]);
+
   const fetchMessages = async () => {
+    if (!supabase) {
+      setErrorMsg('Supabase URL या Anon Key सेट नहीं है। कृपया Settings में जांचें।');
+      setLoading(false);
+      return;
+    }
     try {
       setErrorMsg(null);
       const { data, error } = await supabase
@@ -40,7 +53,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         .select('*')
         .order('created_at', { ascending: false })
         .limit(60);
-
       if (error) throw error;
       if (data) {
         setMessages((data as CommunityMessage[]).reverse());
@@ -54,6 +66,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
 
   useEffect(() => {
     fetchMessages();
+    if (!supabase) return;
 
     const channel = supabase
       .channel('public:community_messages')
@@ -73,13 +86,14 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [supabase]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, aiThinking]);
 
   const triggerDinuAiReply = async (historySnapshot: CommunityMessage[], latestPrompt: string) => {
+    if (!supabase) return;
     const envKey = (import.meta as { env?: Record<string, string> }).env?.VITE_GEMINI_API_KEY?.trim();
     const activeKey = settings.apiKey?.trim() || settings.backupApiKey?.trim() || envKey;
     if (!activeKey) return;
@@ -136,9 +150,12 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     e.preventDefault();
     const text = input.trim();
     if (!text || sending) return;
-
     if (!currentStudent) {
       onRequireLogin();
+      return;
+    }
+    if (!supabase) {
+      setErrorMsg('Supabase कनेक्ट नहीं है।');
       return;
     }
 
@@ -169,7 +186,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         : [...messages, insertedMsg];
       setMessages(updatedHistory);
 
-      // Strict check: AI responds ONLY when @dinu is mentioned (case-insensitive)
       if (/@dinu\b/i.test(text)) {
         await triggerDinuAiReply(updatedHistory, `${currentStudent.name}: ${text}`);
       }
@@ -223,7 +239,9 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           <div className="flex h-full flex-col items-center justify-center text-center p-6 text-xs text-slate-500">
             <Sparkles className="w-8 h-8 text-indigo-400 mb-2" />
             <p className="font-bold text-slate-700 dark:text-slate-300">अभी कोई मैसेज नहीं है</p>
-            <p className="mt-1">पहला डाउट पूछें या <span className="font-bold text-indigo-500">@dinu</span> लिखकर AI से मदद लें!</p>
+            <p className="mt-1">
+              पहला डाउट पूछें या <span className="font-bold text-indigo-500">@dinu</span> लिखकर AI से मदद लें!
+            </p>
           </div>
         ) : (
           messages.map((msg) => {
@@ -253,7 +271,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                     </>
                   )}
                 </div>
-
                 <div
                   className={`rounded-2xl px-3.5 py-2.5 text-xs whitespace-pre-wrap leading-relaxed shadow-sm ${
                     msg.is_ai
