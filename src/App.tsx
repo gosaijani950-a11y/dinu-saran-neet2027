@@ -227,15 +227,7 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
   }
 });
 
-  const [showSecretHub, setShowSecretHub] = useState(false);
-const [globalStreak, setGlobalStreak] = useState<number>(() => {
-  try {
-    const raw = JSON.parse(localStorage.getItem('dinu_neet2027_streak_v1') || '{"count":1}');
-    return Math.max(1, Number(raw.count) || 1);
-  } catch {
-    return 1;
-  }
-});
+  
 
 
   const showToast = useCallback((message: string, tone: 'success' | 'error' | 'info' = 'info') => {
