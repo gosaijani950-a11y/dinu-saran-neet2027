@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
   Send,
@@ -33,52 +33,12 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
+import {
+  GlobalSafeErrorBoundary,
+  formatNeetExamText,
+  HINDI_NEET_PYQ_BANK,
+} from '../utils/neetEngine';
 
-/* ============================================================================
-   1. GLOBAL ERROR BOUNDARY (0.0001% Crash Guarantee)
-============================================================================ */
-interface ErrorBoundaryState {
-  hasError: boolean;
-  errorText: string;
-}
-
-class SafeCommunityBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
-  state: ErrorBoundaryState = { hasError: false, errorText: '' };
-
-  static getDerivedStateFromError(err: Error): ErrorBoundaryState {
-    return { hasError: true, errorText: err?.message || 'Unexpected UI error' };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('Community Safe Recovery:', error, info);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="mx-auto my-8 max-w-md rounded-3xl border border-amber-500/40 bg-slate-900 p-6 text-center text-white shadow-xl space-y-3">
-          <AlertTriangle className="mx-auto h-10 w-10 text-amber-400" />
-          <h3 className="text-base font-extrabold">Safe Recovery Mode Active</h3>
-          <p className="text-xs text-slate-300">
-            आपका लोकल चैट डेटा पूरी तरह सुरक्षित है। एक टैप में दोबारा शुरू करें:
-          </p>
-          <button
-            type="button"
-            onClick={() => this.setState({ hasError: false, errorText: '' })}
-            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-extrabold text-white hover:bg-indigo-500"
-          >
-            Reload Community Smoothly
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-/* ============================================================================
-   2. TYPES & CONSTANTS
-============================================================================ */
 export interface PollData {
   question: string;
   options: string[];
@@ -149,56 +109,6 @@ const STREAK_KEY = 'dinu_neet2027_streak_v1';
 const ANNOUNCEMENT_KEY = 'dinu_neet2027_announcement_v1';
 const SLOWMODE_KEY = 'dinu_neet2027_slowmode_v1';
 
-/* ============================================================================
-   3. CURATED RAPID-FIRE NEET PYQ BANK (Instant 1-Click Polls)
-============================================================================ */
-const INSTANT_PYQ_BANK: Array<{
-  subject: Exclude<SubjectTab, 'All'>;
-  question: string;
-  options: string[];
-  correctIndex: number;
-}> = [
-  {
-    subject: 'Biology',
-    question: '[NEET PYQ] Which enzyme joins Okazaki fragments during DNA replication?',
-    options: ['DNA Polymerase I', 'DNA Ligase', 'Helicase', 'Primase'],
-    correctIndex: 1,
-  },
-  {
-    subject: 'Biology',
-    question: '[NEET PYQ] Kranz anatomy is characteristic of leaves of:',
-    options: ['C3 plants', 'C4 plants', 'CAM plants', 'Hydrophytes'],
-    correctIndex: 1,
-  },
-  {
-    subject: 'Chemistry',
-    question: '[NEET PYQ] Which of the following shows the highest acidic strength?',
-    options: ['p-Nitrophenol', 'p-Cresol', 'Phenol', 'Ethanol'],
-    correctIndex: 0,
-  },
-  {
-    subject: 'Chemistry',
-    question: '[NEET PYQ] Hybridization of XeF4 is:',
-    options: ['sp3', 'sp3d', 'sp3d2', 'dsp2'],
-    correctIndex: 2,
-  },
-  {
-    subject: 'Physics',
-    question: '[NEET PYQ] Dimensional formula of Planck’s constant (h) is identical to:',
-    options: ['Linear momentum', 'Angular momentum', 'Torque', 'Power'],
-    correctIndex: 1,
-  },
-  {
-    subject: 'Physics',
-    question: '[NEET PYQ] Escape velocity from Earth is 11.2 km/s. If mass of planet is 2M and radius is 2R, escape velocity is:',
-    options: ['11.2 km/s', '22.4 km/s', '5.6 km/s', '15.8 km/s'],
-    correctIndex: 0,
-  },
-];
-
-/* ============================================================================
-   4. PRE-SEND ABUSE GUARD & FORMULA FORMATTER
-============================================================================ */
 const BANNED_PATTERNS: RegExp[] = [
   /\b(madarchod|behenchod|bhenchod|bhosdike|bhosdiwale|chutiya|chutiye|gandu|randi|harami|haramkhor|kamina|kamine|laude|lode|lawde|lund|chut|bsdk|mc|bc)\b/i,
   /\b(fuck|fucking|motherfucker|bitch|bastard|asshole|dickhead|slut|whore)\b/i,
@@ -218,49 +128,6 @@ const containsAbuseOrSpam = (text: string): string | null => {
   return null;
 };
 
-const formatScientificText = (raw: string): string => {
-  const subMap: Record<string, string> = {
-    '0': '₀',
-    '1': '₁',
-    '2': '₂',
-    '3': '₃',
-    '4': '₄',
-    '5': '₅',
-    '6': '₆',
-    '7': '₇',
-    '8': '₈',
-    '9': '₉',
-  };
-  const supMap: Record<string, string> = {
-    '0': '⁰',
-    '1': '¹',
-    '2': '²',
-    '3': '³',
-    '4': '⁴',
-    '5': '⁵',
-    '6': '⁶',
-    '7': '⁷',
-    '8': '⁸',
-    '9': '⁹',
-    '+': '⁺',
-    '-': '⁻',
-  };
-
-  return raw
-    .replace(/->/g, '→')
-    .replace(/<->/g, '⇌')
-    .replace(/\b([A-Z][a-z]?)(\d)(?=[A-Z0-9\s,.)]|$)/g, (_, el, d) => `${el}${subMap[d] || d}`)
-    .replace(/\^([0-9+-]+)/g, (_, exp) =>
-      exp
-        .split('')
-        .map((c: string) => supMap[c] || c)
-        .join('')
-    );
-};
-
-/* ============================================================================
-   5. INDEXEDDB VAULT HELPERS
-============================================================================ */
 const openLocalVault = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
     const req = indexedDB.open(LOCAL_DB_NAME, 1);
@@ -379,9 +246,6 @@ const compressImageToBase64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-/* ============================================================================
-   6. MAIN COMMUNITY COMPONENT
-============================================================================ */
 const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
   currentStudent,
   settings,
@@ -404,7 +268,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
   const [showAdminPinModal, setShowAdminPinModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
 
-  // Bookmarks & Study Streak (Local-First)
   const [bookmarkedIds, setBookmarkedIds] = useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
@@ -414,7 +277,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
   });
   const [studyStreak, setStudyStreak] = useState<number>(1);
 
-  // Admin Live Announcement & Slow-Mode
   const [announcement, setAnnouncement] = useState<string>(() => {
     try {
       return localStorage.getItem(ANNOUNCEMENT_KEY) || '';
@@ -432,19 +294,16 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
   });
   const [lastSentAt, setLastSentAt] = useState<number>(0);
 
-  // Poll Builder Modal state
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '', '', '']);
   const [pollCorrectIdx, setPollCorrectIdx] = useState<number | null>(null);
 
-  // Realtime Presence & Typing state
   const [onlineCount, setOnlineCount] = useState<number>(1);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const channelRef = useRef<any>(null);
   const lastTypingSentRef = useRef<number>(0);
 
-  // Mention Autocomplete state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
 
   const [blockTarget, setBlockTarget] = useState<{ studentId: string; studentName: string } | null>(
@@ -483,7 +342,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
     );
   }, [currentStudent]);
 
-  // Daily Study Streak tracker
   useEffect(() => {
     try {
       const today = new Date().toISOString().slice(0, 10);
@@ -643,7 +501,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
       ? String(currentStudent.id)
       : `guest-${Math.random().toString(36).slice(2, 8)}`;
 
-    const channel = supabase.channel('public:community_ultra_v6', {
+    const channel = supabase.channel('public:community_ultra_v7', {
       config: { presence: { key: presenceKey } },
     });
 
@@ -745,7 +603,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
       .catch(() => {});
   };
 
-  // Toggle Bookmark into Personal Revision Vault
   const toggleBookmark = (msgId: string) => {
     setBookmarkedIds((prev) => {
       const next = { ...prev };
@@ -763,7 +620,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
     [messages, bookmarkedIds]
   );
 
-  // Weekly XP Leaderboard + Doubt Solver Scores
   const { helpfulLeaderboard, weeklyToppers } = useMemo(() => {
     const helpfulMap = new Map<string, number>();
     const xpMap = new Map<string, { id: string; name: string; xp: number; solved: number }>();
@@ -857,7 +713,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
     }
   };
 
-  // Instant 1-Click NEET PYQ Dropper
+  // Pure Hindi Medium NEET PYQ Dropper
   const handleDropRandomPyq = async () => {
     if (!currentStudent) {
       onRequireLogin();
@@ -867,9 +723,9 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
 
     const pool =
       selectedSubject !== 'All' && selectedSubject !== 'General'
-        ? INSTANT_PYQ_BANK.filter((p) => p.subject === selectedSubject)
-        : INSTANT_PYQ_BANK;
-    const picked = pool[Math.floor(Math.random() * pool.length)] || INSTANT_PYQ_BANK[0];
+        ? HINDI_NEET_PYQ_BANK.filter((p) => p.subject === selectedSubject)
+        : HINDI_NEET_PYQ_BANK;
+    const picked = pool[Math.floor(Math.random() * pool.length)] || HINDI_NEET_PYQ_BANK[0];
 
     const displayBatch = adminUnlocked
       ? 'Admin'
@@ -1005,7 +861,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
       .eq('id', msg.id);
   };
 
-  // Admin Broadcast Announcement & Slow-Mode
   const handleSaveAdminBroadcast = () => {
     if (!adminUnlocked) return;
     const clean = announcementDraft.trim();
@@ -1250,7 +1105,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
       const systemInstruction =
         'You are DINU AI, the smart NEET UG mentor inside Dinu Saran NEET 2027 Student Community Chat. ' +
         'You have read the recent group conversation and any attached doubt image. ' +
-        'Reply ONLY because a student tagged @dinu. Give a complete, detailed, step-by-step NCERT-accurate answer in Hindi + English terms without cutting off.';
+        'Reply ONLY because a student tagged @dinu. Give a complete, detailed, step-by-step NCERT-accurate answer in pure Hindi medium (with famous English scientific terms in brackets) without cutting off.';
 
       const replyContext = triggerMsg.reply_to_name
         ? `\nReplied-to Message (${triggerMsg.reply_to_name}): ${triggerMsg.reply_to_text}`
@@ -1354,7 +1209,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
       return;
     }
 
-    // Slow-Mode check (skipped for Admin)
     if (!adminUnlocked && slowModeSeconds > 0 && lastSentAt > 0) {
       const elapsedSec = Math.floor((Date.now() - lastSentAt) / 1000);
       if (elapsedSec < slowModeSeconds) {
@@ -1464,7 +1318,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
     });
   }, [messages, selectedSubject, showPinnedOnly, showSavedOnly, bookmarkedIds, searchQuery]);
 
-  // Windowed slice for 60fps zero-lag rendering
   const visibleMessages = useMemo(() => {
     if (filteredAllMessages.length <= renderLimit) return filteredAllMessages;
     return filteredAllMessages.slice(-renderLimit);
@@ -1593,7 +1446,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
         <div className="flex items-center justify-between border-b border-indigo-500/20 bg-gradient-to-r from-amber-500/15 via-indigo-500/10 to-purple-500/15 px-3.5 py-1.5 text-[11px] text-slate-800 dark:text-amber-200">
           <span className="flex items-center gap-1.5 font-bold truncate">
             <Megaphone className="w-3.5 h-3.5 shrink-0 text-amber-500" />
-            <span className="truncate">{announcement}</span>
+            <span className="truncate">{formatNeetExamText(announcement)}</span>
           </span>
           {slowModeSeconds > 0 && (
             <span className="ml-2 shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-amber-300">
@@ -1686,7 +1539,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
             </button>
           </div>
 
-          {/* Broadcast Daily Target */}
           <div className="rounded-xl bg-slate-800/80 p-2.5 space-y-1.5">
             <div className="text-[11px] font-bold text-indigo-300 flex items-center gap-1">
               <Megaphone className="w-3.5 h-3.5" /> Set Live Daily Target / Notice
@@ -1721,7 +1573,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
             </div>
           </div>
 
-          {/* Slow-Mode & Local Vault Reset */}
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-800/80 p-2.5">
             <div className="flex items-center gap-1.5 text-[11px]">
               <Clock className="w-3.5 h-3.5 text-amber-400" />
@@ -1750,7 +1601,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
             </button>
           </div>
 
-          {/* Blocked Students */}
           <div>
             <div className="text-[11px] font-bold text-rose-400 mb-1">
               Blocked Students ({activeBlockMap.size})
@@ -1783,7 +1633,6 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
             )}
           </div>
 
-          {/* Student Reports */}
           <div>
             <div className="text-[11px] font-bold text-amber-400 mb-1">
               Student Reports ({reports.length}) — 7 reports = Auto-Delete
@@ -1904,7 +1753,9 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
           <span className="truncate flex items-center gap-1.5">
             <Pin className="w-3.5 h-3.5 shrink-0 text-amber-500" />
             <strong className="shrink-0">Pinned:</strong>
-            <span className="truncate">{pinnedMessages[pinnedMessages.length - 1].message}</span>
+            <span className="truncate">
+              {formatNeetExamText(pinnedMessages[pinnedMessages.length - 1].message)}
+            </span>
           </span>
           <span className="ml-2 shrink-0 text-[10px] font-bold underline">
             देखें ({pinnedMessages.length})
@@ -1947,7 +1798,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
             <p className="mt-1">
               {showSavedOnly
                 ? 'किसी भी ज़रूरी ट्रिक या AI सॉल्यूशन के नीचे Save दबाकर यहाँ सेव करें!'
-                : 'पहला डाउट, ⚡ PYQ या फ़ोटो भेजें और @dinu से मदद लें!'}
+                : 'पहला डाउट, ⚡ Drop PYQ या फ़ोटो भेजें और @dinu से मदद लें!'}
             </p>
           </div>
         ) : (
@@ -2050,7 +1901,9 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
                       }`}
                     >
                       <div className="font-bold text-[10px]">{msg.reply_to_name}</div>
-                      <div className="line-clamp-2 opacity-90">{msg.reply_to_text}</div>
+                      <div className="line-clamp-2 opacity-90">
+                        {formatNeetExamText(msg.reply_to_text || '')}
+                      </div>
                     </div>
                   )}
 
@@ -2073,7 +1926,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
                     <div className="min-w-[230px] space-y-2">
                       <div className="font-extrabold text-[12px] flex items-center gap-1.5">
                         <BarChart2 className="w-4 h-4 shrink-0 text-amber-400" />
-                        <span>{formatScientificText(poll.question)}</span>
+                        <span>{formatNeetExamText(poll.question)}</span>
                       </div>
                       <div className="space-y-1.5">
                         {poll.options.map((opt, idx) => {
@@ -2117,7 +1970,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
                                   <span className="opacity-70">
                                     {String.fromCharCode(65 + idx)}.
                                   </span>{' '}
-                                  {formatScientificText(opt)}
+                                  {formatNeetExamText(opt)}
                                   {isCorrect && (
                                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 inline" />
                                   )}
@@ -2135,7 +1988,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
                       </div>
                     </div>
                   ) : (
-                    <div>{formatScientificText(msg.message)}</div>
+                    <div>{formatNeetExamText(msg.message)}</div>
                   )}
                 </div>
 
@@ -2339,8 +2192,8 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
           onSubmit={handleSend}
           className="flex flex-col gap-1.5 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5"
         >
-          {selectedSubject === 'All' && (
-            <div className="flex items-center justify-between gap-1 px-1 text-[10px] text-slate-500">
+          <div className="flex items-center justify-between gap-1 px-1 text-[10px] text-slate-500">
+            {selectedSubject === 'All' ? (
               <div className="flex items-center gap-1">
                 <span>Subject:</span>
                 {(['General', 'Physics', 'Chemistry', 'Biology'] as const).map((s) => (
@@ -2358,16 +2211,18 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
                   </button>
                 ))}
               </div>
-              <button
-                type="button"
-                onClick={handleDropRandomPyq}
-                className="inline-flex items-center gap-0.5 rounded-md bg-purple-500/15 px-2 py-0.5 font-extrabold text-purple-600 dark:text-purple-300 hover:bg-purple-500/25"
-                title="1-Click NEET PYQ Quiz ड्रॉप करें"
-              >
-                <Zap className="w-3 h-3" /> Drop PYQ
-              </button>
-            </div>
-          )}
+            ) : (
+              <span className="font-bold text-indigo-500">{selectedSubject} PYQ Mode</span>
+            )}
+            <button
+              type="button"
+              onClick={handleDropRandomPyq}
+              className="ml-auto inline-flex items-center gap-0.5 rounded-md bg-purple-500/15 px-2 py-0.5 font-extrabold text-purple-600 dark:text-purple-300 hover:bg-purple-500/25"
+              title="शुद्ध हिंदी NEET PYQ Quiz ड्रॉप करें"
+            >
+              <Zap className="w-3 h-3" /> Drop हिंदी PYQ
+            </button>
+          </div>
 
           <div className="flex items-center gap-1">
             <input
@@ -2659,7 +2514,7 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
 };
 
 export const CommunityChatView: React.FC<CommunityChatViewProps> = (props) => (
-  <SafeCommunityBoundary>
+  <GlobalSafeErrorBoundary>
     <CommunityChatInner {...props} />
-  </SafeCommunityBoundary>
+  </GlobalSafeErrorBoundary>
 );
