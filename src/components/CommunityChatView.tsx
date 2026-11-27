@@ -140,7 +140,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         },
       ]);
     } catch {
-      // Silent fail so student chat remains uninterrupted
+      // Silent fail
     } finally {
       setAiThinking(false);
     }
@@ -164,20 +164,20 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     setErrorMsg(null);
 
     try {
+      const displayName =
+        currentStudent.full_name?.trim() ||
+        (currentStudent as any).name?.trim() ||
+        'NEET Aspirant';
+      const displayBatch =
+        currentStudent.attempt_status || 'NEET 2027';
+
       const { data, error } = await supabase
         .from('community_messages')
         .insert([
           {
-            student_id: String((currentStudent as any).id || (currentStudent as any).uid || 'student-user'),
-student_name:
-  (currentStudent as any).name ||
-  (currentStudent as any).fullName ||
-  (currentStudent as any).studentName ||
-  (currentStudent as any).displayName ||
-  (currentStudent as any).username ||
-  'NEET Aspirant',
-batch_name: (currentStudent as any).batch || (currentStudent as any).targetYear || 'NEET 2027',
-
+            student_id: String(currentStudent.id || 'student-user'),
+            student_name: displayName,
+            batch_name: displayBatch,
             is_ai: false,
             message: text,
           },
@@ -194,7 +194,7 @@ batch_name: (currentStudent as any).batch || (currentStudent as any).targetYear 
       setMessages(updatedHistory);
 
       if (/@dinu\b/i.test(text)) {
-        await triggerDinuAiReply(updatedHistory, `${currentStudent.name}: ${text}`);
+        await triggerDinuAiReply(updatedHistory, `${displayName}: ${text}`);
       }
     } catch (err: any) {
       setErrorMsg(err?.message || 'मैसेज भेजने में त्रुटि हुई।');
