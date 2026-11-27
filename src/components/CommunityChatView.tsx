@@ -19,8 +19,20 @@ import {
   Unlock,
   AlertTriangle,
   KeyRound,
+  Search,
+  ThumbsUp,
+  Award,
+  BarChart2,
+  CheckCircle2,
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
+
+export interface PollData {
+  question: string;
+  options: string[];
+  votes: Record<string, number>; // student_id -> optionIndex (0..3)
+  correctIndex?: number | null;
+}
 
 export interface CommunityMessage {
   id: string;
@@ -36,6 +48,8 @@ export interface CommunityMessage {
   is_admin_msg?: boolean;
   is_ai: boolean;
   message: string;
+  helpful_by?: string[] | null;
+  poll_data?: PollData | null;
   created_at: string;
 }
 
@@ -76,6 +90,26 @@ const AI_AUTO_DELETE_DELAY_MS = 90_000;
 const AUTO_DELETE_REPORT_THRESHOLD = 7;
 const LOCAL_DB_NAME = 'dinu_neet2027_community_db';
 const LOCAL_STORE_NAME = 'messages_vault';
+
+// Pre-send client-side abuse & spam filter
+const BANNED_PATTERNS: RegExp[] = [
+  /\b(madarchod|behenchod|bhenchod|bhosdike|bhosdiwale|chutiya|chutiye|gandu|randi|harami|haramkhor|kamina|kamine|laude|lode|lawde|lund|chut|bsdk|mc|bc)\b/i,
+  /\b(fuck|fucking|motherfucker|bitch|bastard|asshole|dickhead|slut|whore)\b/i,
+  /(https?:\/\/t\.me\/|chat\.whatsapp\.com\/)/i,
+];
+
+const containsAbuseOrSpam = (text: string): string | null => {
+  const normalized = text.replace(/[*_.\-@]+/g, '');
+  for (const rx of BANNED_PATTERNS) {
+    if (rx.test(text) || rx.test(normalized)) {
+      if (rx.source.includes('t\\.me') || rx.source.includes('whatsapp')) {
+        return 'बाहरी Telegram या WhatsApp प्रमोशन लिंक भेजना मना है।';
+      }
+      return 'गाली-गलौज या अभद्र भाषा का उपयोग सख्त मना है। कृपया मर्यादित भाषा लिखें।';
+    }
+  }
+  return null;
+};
 
 const openLocalVault = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
@@ -205,12 +239,30 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   const [blocks, setBlocks] = useState<CommunityBlock[]>([]);
   const [reports, setReports] = useState<CommunityReport[]>([]);
   const [input, setInput] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearchBar, setShowSearchBar] = useState(false);
   const [selectedSubject, setSelectedSubject] = useState<SubjectTab>('All');
   const [postSubject, setPostSubject] = useState<Exclude<SubjectTab, 'All'>>('General');
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
   const [showModPanel, setShowModPanel] = useState(false);
   const [showAdminPinModal, setShowAdminPinModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
+
+  // Poll Builder Modal state
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState(['', '', '', '']);
+  const [pollCorrectIdx, setPollCorrectIdx] = useState<number | null>(null);
+
+  // Realtime Presence & Typing state
+  const [onlineCount, setOnlineCount] = useState<number>(1);
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const channelRef = useRef<any>(null);
+  const lastTypingSentRef = useRef<number>(0);
+
+  // Mention Autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+
   const [blockTarget, setBlockTarget] = useState<{ studentId: string; studentName: string } | null>(
     null
   );
@@ -238,6 +290,15 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     return createClient(url, key);
   }, [settings.supabaseUrl, settings.supabaseAnonKey]);
 
+  const myDisplayName = useMemo(() => {
+    if (!currentStudent) return 'Guest';
+    return (
+      currentStudent.full_name?.trim() ||
+      (currentStudent as any).name?.trim() ||
+      'NEET Aspirant'
+    );
+  }, [currentStudent]);
+
   useEffect(() => {
     const detectAdmin = async () => {
       if (isAdmin) {
@@ -254,7 +315,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           setAdminUnlocked(true);
           return;
         }
-        // Check Supabase public.admins table by currentStudent id or email/mobile
         if (supabase && currentStudent) {
           const { data } = await supabase.from('admins').select('*');
           if (Array.isArray(data) && data.length > 0) {
@@ -323,7 +383,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       if (blocksRes.data) setBlocks(blocksRes.data as CommunityBlock[]);
       if (reportsRes.data) setReports(reportsRes.data as CommunityReport[]);
     } catch {
-      // Ignore before SQL run
+      // Ignore
     }
   };
 
@@ -377,8 +437,15 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     syncMessages();
     if (!supabase) return;
 
-    const channel = supabase
-      .channel('public:community_moderation_v4')
+    const presenceKey = currentStudent?.id
+      ? String(currentStudent.id)
+      : `guest-${Math.random().toString(36).slice(2, 8)}`;
+
+    const channel = supabase.channel('public:community_pro_v5', {
+      config: { presence: { key: presenceKey } },
+    });
+
+    channel
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'community_messages' },
@@ -402,27 +469,233 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'community_blocks' },
-        () => {
-          fetchModerationData();
-        }
+        () => fetchModerationData()
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'community_reports' },
-        () => {
-          fetchModerationData();
-        }
+        () => fetchModerationData()
       )
-      .subscribe();
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState();
+        const keys = Object.keys(state);
+        setOnlineCount(Math.max(1, keys.length));
+        const activeTypers: string[] = [];
+        keys.forEach((k) => {
+          const entries = state[k] as any[];
+          entries?.forEach((entry) => {
+            if (entry?.typing && entry?.name && k !== presenceKey) {
+              if (!activeTypers.includes(entry.name)) activeTypers.push(entry.name);
+            }
+          });
+        });
+        setTypingUsers(activeTypers);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({
+            name: myDisplayName,
+            typing: false,
+            online_at: new Date().toISOString(),
+          });
+        }
+      });
+
+    channelRef.current = channel;
 
     return () => {
       supabase.removeChannel(channel);
+      channelRef.current = null;
     };
-  }, [supabase]);
+  }, [supabase, currentStudent?.id, myDisplayName]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length, aiThinking]);
+    if (!searchQuery.trim()) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages.length, aiThinking, searchQuery]);
+
+  // Broadcast typing state throttled
+  const notifyTyping = (isTyping: boolean) => {
+    if (!channelRef.current || !currentStudent) return;
+    const now = Date.now();
+    if (isTyping && now - lastTypingSentRef.current < 2500) return;
+    lastTypingSentRef.current = now;
+    channelRef.current
+      .track({
+        name: myDisplayName,
+        typing: isTyping,
+        online_at: new Date().toISOString(),
+      })
+      .catch(() => {});
+  };
+
+  // Compute Top Doubt Solvers (students with >= 2 helpful upvotes across messages)
+  const helpfulLeaderboard = useMemo(() => {
+    const counts = new Map<string, number>();
+    messages.forEach((m) => {
+      if (!m.is_ai && Array.isArray(m.helpful_by) && m.helpful_by.length > 0) {
+        counts.set(m.student_id, (counts.get(m.student_id) || 0) + m.helpful_by.length);
+      }
+    });
+    return counts;
+  }, [messages]);
+
+  // Unique participants for @mention autocomplete
+  const mentionCandidates = useMemo(() => {
+    const map = new Map<string, string>();
+    map.set('dinu', 'DINU AI (Mentor)');
+    messages.forEach((m) => {
+      if (!m.is_ai && m.student_name && m.student_id !== currentStudent?.id) {
+        map.set(m.student_name, m.batch_name || 'Student');
+      }
+    });
+    return Array.from(map.entries()).map(([name, badge]) => ({ name, badge }));
+  }, [messages, currentStudent?.id]);
+
+  const filteredMentions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.toLowerCase();
+    return mentionCandidates
+      .filter((c) => c.name.toLowerCase().includes(q))
+      .slice(0, 5);
+  }, [mentionQuery, mentionCandidates]);
+
+  const handleInputChange = (val: string) => {
+    setInput(val);
+    notifyTyping(val.trim().length > 0);
+
+    // Detect @mention trigger at end of input
+    const match = val.match(/(?:^|\s)@([a-zA-Z0-9_]*)$/);
+    if (match) {
+      setMentionQuery(match[1]);
+    } else {
+      setMentionQuery(null);
+    }
+  };
+
+  const applyMention = (name: string) => {
+    const tag = name === 'dinu' ? '@dinu ' : `@${name} `;
+    setInput((prev) => prev.replace(/(?:^|\s)@[a-zA-Z0-9_]*$/, (m) => (m.startsWith(' ') ? ` ${tag}` : tag)));
+    setMentionQuery(null);
+  };
+
+  const handleToggleHelpful = async (msg: CommunityMessage) => {
+    if (!currentStudent) {
+      onRequireLogin();
+      return;
+    }
+    const myId = String(currentStudent.id);
+    if (msg.student_id === myId) return; // Can't upvote own message
+
+    const currentList = Array.isArray(msg.helpful_by) ? msg.helpful_by : [];
+    const already = currentList.includes(myId);
+    const updatedList = already
+      ? currentList.filter((id) => id !== myId)
+      : [...currentList, myId];
+
+    const updatedMsg = { ...msg, helpful_by: updatedList };
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? updatedMsg : m)));
+    await upsertLocalMessages([updatedMsg]);
+
+    if (supabase) {
+      await supabase
+        .from('community_messages')
+        .update({ helpful_by: updatedList })
+        .eq('id', msg.id);
+    }
+  };
+
+  const handleCreatePoll = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentStudent) {
+      onRequireLogin();
+      return;
+    }
+    if (!supabase) return;
+
+    const q = pollQuestion.trim();
+    const validOpts = pollOptions.map((o) => o.trim()).filter(Boolean);
+    if (!q || validOpts.length < 2) {
+      setErrorMsg('पोल में कम से कम सवाल और 2 विकल्प (Options) ज़रूरी हैं।');
+      return;
+    }
+
+    const abuseError = containsAbuseOrSpam(`${q} ${validOpts.join(' ')}`);
+    if (abuseError) {
+      setErrorMsg(abuseError);
+      return;
+    }
+
+    const displayBatch = adminUnlocked
+      ? 'Admin'
+      : currentStudent.attempt_status || 'NEET 2027';
+    const activeSubject = selectedSubject !== 'All' ? selectedSubject : postSubject;
+
+    const pollPayload: PollData = {
+      question: q,
+      options: validOpts,
+      votes: {},
+      correctIndex: pollCorrectIdx,
+    };
+
+    setSending(true);
+    setShowPollModal(false);
+    setPollQuestion('');
+    setPollOptions(['', '', '', '']);
+    setPollCorrectIdx(null);
+
+    try {
+      const { data, error } = await supabase
+        .from('community_messages')
+        .insert([
+          {
+            student_id: String(currentStudent.id),
+            student_name: myDisplayName,
+            batch_name: displayBatch,
+            subject: activeSubject,
+            is_admin_msg: adminUnlocked,
+            is_ai: false,
+            message: `📊 NEET Poll: ${q}`,
+            poll_data: pollPayload,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        const inserted = data as CommunityMessage;
+        await upsertLocalMessages([inserted]);
+        setMessages((prev) => mergeMessageLists(prev, [inserted]));
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'पोल बनाने में समस्या आई।');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleVotePoll = async (msg: CommunityMessage, optionIndex: number) => {
+    if (!currentStudent) {
+      onRequireLogin();
+      return;
+    }
+    if (!msg.poll_data || !supabase) return;
+
+    const myId = String(currentStudent.id);
+    const updatedVotes = { ...(msg.poll_data.votes || {}), [myId]: optionIndex };
+    const updatedPoll: PollData = { ...msg.poll_data, votes: updatedVotes };
+    const updatedMsg: CommunityMessage = { ...msg, poll_data: updatedPoll };
+
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? updatedMsg : m)));
+    await upsertLocalMessages([updatedMsg]);
+
+    await supabase
+      .from('community_messages')
+      .update({ poll_data: updatedPoll })
+      .eq('id', msg.id);
+  };
 
   const myActiveBlock = useMemo(() => {
     if (!currentStudent || adminUnlocked) return null;
@@ -443,7 +716,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     return map;
   }, [blocks, nowTick]);
 
-  // Count unique reports per message_id and per student_id
   const { messageReportCounts, studentReportCounts } = useMemo(() => {
     const msgReporters = new Map<string, Set<string>>();
     const stuReports = new Map<string, number>();
@@ -514,11 +786,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     }
 
     const reporterId = String(currentStudent.id || 'student');
-    const reporterName =
-      currentStudent.full_name?.trim() ||
-      (currentStudent as any).name?.trim() ||
-      'NEET Student';
-
     const { error } = await supabase.from('community_reports').insert([
       {
         message_id: reportTarget.id,
@@ -526,7 +793,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         reported_student_name: reportTarget.student_name,
         message_preview: (reportTarget.message || '📷 Photo').slice(0, 120),
         reporter_id: reporterId,
-        reporter_name: reporterName,
+        reporter_name: myDisplayName,
         reason: reportReason,
       },
     ]);
@@ -538,7 +805,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       setReportedIds((prev) => ({ ...prev, [targetMsg.id]: true }));
       setReportTarget(null);
 
-      // Client-side fallback check: if >= 7 unique reports & NOT an admin message, delete immediately
       if (!targetMsg.is_admin_msg) {
         const { data: allReps } = await supabase
           .from('community_reports')
@@ -750,12 +1016,24 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       setErrorMsg('आपको Admin द्वारा ब्लॉक किया गया है। आप अभी मैसेज नहीं भेज सकते।');
       return;
     }
+
+    // Pre-send abuse & spam guard (skipped only for Admin)
+    if (!adminUnlocked && text) {
+      const violation = containsAbuseOrSpam(text);
+      if (violation) {
+        setErrorMsg(violation);
+        return;
+      }
+    }
+
     if (!supabase) {
       setErrorMsg('Supabase कनेक्ट नहीं है।');
       return;
     }
 
     setSending(true);
+    notifyTyping(false);
+    setMentionQuery(null);
     const currentImage = attachedImage;
     const currentReply = replyingTo;
     setInput('');
@@ -764,10 +1042,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     setErrorMsg(null);
 
     try {
-      const displayName =
-        currentStudent.full_name?.trim() ||
-        (currentStudent as any).name?.trim() ||
-        'NEET Aspirant';
       const displayBatch = adminUnlocked
         ? 'Admin'
         : currentStudent.attempt_status || 'NEET 2027';
@@ -778,7 +1052,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         .insert([
           {
             student_id: String(currentStudent.id || 'student-user'),
-            student_name: displayName,
+            student_name: myDisplayName,
             batch_name: displayBatch,
             subject: activeSubject,
             image_data: currentImage,
@@ -806,7 +1080,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       setMessages(updatedHistory);
 
       if (/@dinu\b/i.test(text)) {
-        await triggerDinuAiReply(updatedHistory, `${displayName}: ${text}`, insertedMsg);
+        await triggerDinuAiReply(updatedHistory, `${myDisplayName}: ${text}`, insertedMsg);
       }
     } catch (err: any) {
       setErrorMsg(err?.message || 'मैसेज भेजने में त्रुटि हुई।');
@@ -827,14 +1101,21 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   const pinnedMessages = useMemo(() => messages.filter((m) => m.is_pinned), [messages]);
 
   const visibleMessages = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return messages.filter((m) => {
       if (showPinnedOnly && !m.is_pinned) return false;
       if (selectedSubject !== 'All' && (m.subject || 'General') !== selectedSubject) {
         return false;
       }
+      if (q) {
+        const inMsg = m.message?.toLowerCase().includes(q);
+        const inName = m.student_name?.toLowerCase().includes(q);
+        const inPoll = m.poll_data?.question?.toLowerCase().includes(q);
+        if (!inMsg && !inName && !inPoll) return false;
+      }
       return true;
     });
-  }, [messages, selectedSubject, showPinnedOnly]);
+  }, [messages, selectedSubject, showPinnedOnly, searchQuery]);
 
   const subjectBadgeColor = (subj?: string) => {
     switch (subj) {
@@ -874,6 +1155,10 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           <div>
             <div className="flex items-center gap-1.5">
               <h2 className="text-sm font-extrabold">NEET 2027 Community</h2>
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-400/20 px-1.5 py-0.5 text-[9px] font-bold text-emerald-200">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                {onlineCount} Online
+              </span>
               {adminUnlocked && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-400/25 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
                   <ShieldCheck className="w-3 h-3" /> Admin
@@ -881,17 +1166,30 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
               )}
             </div>
             <p className="text-[10px] text-indigo-100 flex items-center gap-1">
-              <Database className="w-3 h-3" /> Local: {messages.length} msgs •{' '}
+              <Database className="w-3 h-3" /> Vault: {messages.length} •{' '}
               <span className="font-bold text-amber-300">@dinu</span>
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={() => {
+              setShowSearchBar((s) => !s);
+              if (showSearchBar) setSearchQuery('');
+            }}
+            className={`rounded-xl p-2 hover:bg-white/15 ${
+              showSearchBar ? 'bg-white/20 text-amber-300' : 'text-indigo-100'
+            }`}
+            title="Search in Local Vault"
+          >
+            <Search className="w-4 h-4" />
+          </button>
           {adminUnlocked ? (
             <button
               type="button"
               onClick={() => setShowModPanel((p) => !p)}
-              className="rounded-xl bg-amber-400/20 border border-amber-300/40 px-2.5 py-1.5 text-[10px] font-extrabold text-amber-200 hover:bg-amber-400/30 flex items-center gap-1"
+              className="rounded-xl bg-amber-400/20 border border-amber-300/40 px-2 py-1.5 text-[10px] font-extrabold text-amber-200 hover:bg-amber-400/30 flex items-center gap-1"
               title="Blocked Users & Student Reports"
             >
               <AlertTriangle className="w-3.5 h-3.5" />
@@ -925,6 +1223,30 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Local Vault Instant Search Bar */}
+      {showSearchBar && (
+        <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 px-3 py-1.5">
+          <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Local Vault में पुराना डाउट, फ़ॉर्मूला या नाम खोजें..."
+            className="flex-1 bg-transparent text-xs text-slate-800 dark:text-slate-100 focus:outline-none"
+            autoFocus
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="text-[10px] text-slate-400 hover:text-rose-500"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Admin Moderation Drawer */}
       {adminUnlocked && showModPanel && (
@@ -1095,10 +1417,14 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           <div className="flex h-full flex-col items-center justify-center text-center p-6 text-xs text-slate-500">
             <Sparkles className="w-8 h-8 text-indigo-400 mb-2" />
             <p className="font-bold text-slate-700 dark:text-slate-300">
-              {showPinnedOnly ? 'अभी कोई Pinned मैसेज नहीं है' : 'इस सेक्शन में अभी कोई मैसेज नहीं है'}
+              {searchQuery
+                ? `"${searchQuery}" से जुड़ा कोई मैसेज नहीं मिला`
+                : showPinnedOnly
+                ? 'अभी कोई Pinned मैसेज नहीं है'
+                : 'इस सेक्शन में अभी कोई मैसेज नहीं है'}
             </p>
             <p className="mt-1">
-              पहला डाउट या फ़ोटो भेजें और <span className="font-bold text-indigo-500">@dinu</span> से मदद लें!
+              पहला डाउट, पोल या फ़ोटो भेजें और <span className="font-bold text-indigo-500">@dinu</span> से मदद लें!
             </p>
           </div>
         ) : (
@@ -1109,6 +1435,18 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             const msgReps = messageReportCounts.get(msg.id) || 0;
             const userTotalReps = studentReportCounts.get(msg.student_id) || 0;
             const isAdminAuthor = !!msg.is_admin_msg || msg.batch_name === 'Admin';
+            const solverScore = helpfulLeaderboard.get(msg.student_id) || 0;
+            const helpfulList = Array.isArray(msg.helpful_by) ? msg.helpful_by : [];
+            const iUpvoted = currentStudent ? helpfulList.includes(String(currentStudent.id)) : false;
+
+            // Poll stats calculation
+            const poll = msg.poll_data;
+            const pollVotesObj = poll?.votes || {};
+            const totalVotes = Object.keys(pollVotesObj).length;
+            const myVoteIdx =
+              currentStudent && pollVotesObj[String(currentStudent.id)] !== undefined
+                ? pollVotesObj[String(currentStudent.id)]
+                : null;
 
             return (
               <div
@@ -1137,6 +1475,11 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                             {msg.batch_name}
                           </span>
                         )
+                      )}
+                      {!isAdminAuthor && solverScore >= 2 && (
+                        <span className="inline-flex items-center gap-0.5 rounded bg-emerald-500/15 px-1.5 py-0.2 text-[9px] font-extrabold text-emerald-600 dark:text-emerald-300">
+                          <Award className="w-2.5 h-2.5" /> Doubt Solver
+                        </span>
                       )}
                       {adminUnlocked && !isAdminAuthor && userTotalReps > 0 && (
                         <span className="rounded bg-rose-500/15 px-1.5 py-0.2 text-[9px] font-bold text-rose-500">
@@ -1202,7 +1545,75 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                     </button>
                   )}
 
-                  <div>{msg.message}</div>
+                  {/* Interactive NEET Poll Card */}
+                  {poll ? (
+                    <div className="min-w-[230px] space-y-2">
+                      <div className="font-extrabold text-[12px] flex items-center gap-1.5">
+                        <BarChart2 className="w-4 h-4 shrink-0 text-amber-400" />
+                        <span>{poll.question}</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {poll.options.map((opt, idx) => {
+                          const optVotes = Object.values(pollVotesObj).filter(
+                            (v) => v === idx
+                          ).length;
+                          const pct =
+                            totalVotes > 0 ? Math.round((optVotes / totalVotes) * 100) : 0;
+                          const isSelected = myVoteIdx === idx;
+                          const isCorrect =
+                            myVoteIdx !== null &&
+                            poll.correctIndex !== null &&
+                            poll.correctIndex !== undefined &&
+                            poll.correctIndex === idx;
+
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => handleVotePoll(msg, idx)}
+                              className={`relative w-full overflow-hidden rounded-xl border px-2.5 py-1.5 text-left text-[11px] transition ${
+                                isMine
+                                  ? 'border-white/25 bg-white/10 hover:bg-white/20 text-white'
+                                  : 'border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900 hover:border-indigo-500'
+                              }`}
+                            >
+                              {myVoteIdx !== null && (
+                                <div
+                                  className={`absolute inset-y-0 left-0 opacity-25 transition-all ${
+                                    isCorrect
+                                      ? 'bg-emerald-500'
+                                      : isSelected
+                                      ? 'bg-amber-400'
+                                      : 'bg-indigo-500'
+                                  }`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              )}
+                              <div className="relative flex items-center justify-between gap-2 font-semibold">
+                                <span className="flex items-center gap-1">
+                                  <span className="opacity-70">
+                                    {String.fromCharCode(65 + idx)}.
+                                  </span>{' '}
+                                  {opt}
+                                  {isCorrect && (
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 inline" />
+                                  )}
+                                </span>
+                                {myVoteIdx !== null && (
+                                  <span className="text-[10px] font-extrabold">{pct}%</span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="text-[10px] opacity-75">
+                        {totalVotes} votes • टैप करके वोट दें
+                      </div>
+                    </div>
+                  ) : (
+                    <div>{msg.message}</div>
+                  )}
                 </div>
 
                 {/* Action Row */}
@@ -1214,6 +1625,21 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                   >
                     <Reply className="w-3 h-3" /> Reply
                   </button>
+
+                  {!isMine && !msg.is_ai && (
+                    <button
+                      type="button"
+                      onClick={() => handleToggleHelpful(msg)}
+                      className={`inline-flex items-center gap-0.5 ${
+                        iUpvoted
+                          ? 'text-emerald-500 font-bold'
+                          : 'hover:text-emerald-500'
+                      }`}
+                    >
+                      <ThumbsUp className="w-3 h-3" /> Helpful
+                      {helpfulList.length > 0 ? ` (${helpfulList.length})` : ''}
+                    </button>
+                  )}
 
                   {!isMine && !msg.is_ai && !isAdminAuthor && (
                     <button
@@ -1287,6 +1713,14 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           })
         )}
 
+        {/* Live Typing & AI Thinking Indicators */}
+        {typingUsers.length > 0 && (
+          <div className="mr-auto flex items-center gap-1.5 rounded-full bg-slate-200/80 dark:bg-slate-800 px-3 py-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-bounce" />
+            {typingUsers.slice(0, 2).join(', ')} लिख रहे हैं...
+          </div>
+        )}
+
         {aiThinking && (
           <div className="mr-auto flex items-center gap-2 rounded-2xl border border-indigo-500/30 bg-indigo-50/80 dark:bg-indigo-950/60 px-3.5 py-2 text-xs text-indigo-700 dark:text-indigo-200">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1342,6 +1776,23 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
+      {/* @mention Autocomplete Popup */}
+      {filteredMentions.length > 0 && (
+        <div className="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-1.5 flex items-center gap-1.5 overflow-x-auto">
+          <span className="text-[10px] text-slate-400 shrink-0">Tag:</span>
+          {filteredMentions.map((m) => (
+            <button
+              key={m.name}
+              type="button"
+              onClick={() => applyMention(m.name)}
+              className="shrink-0 rounded-full bg-indigo-500/15 px-2.5 py-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-300 hover:bg-indigo-500/25"
+            >
+              @{m.name} <span className="opacity-70 text-[9px]">({m.badge})</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {myActiveBlock ? (
         <div className="border-t border-rose-500/30 bg-rose-500/10 p-3 text-center text-xs text-rose-600 dark:text-rose-300">
           <p className="font-extrabold flex items-center justify-center gap-1.5">
@@ -1377,7 +1828,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             </div>
           )}
 
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             <input
               ref={fileInputRef}
               type="file"
@@ -1395,8 +1846,19 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => {
+                if (!currentStudent) return onRequireLogin();
+                setShowPollModal(true);
+              }}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-500/15 hover:text-emerald-600"
+              title="NEET MCQ Poll बनाएं"
+            >
+              <BarChart2 className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
               onClick={insertTag}
-              className="shrink-0 rounded-xl bg-amber-500/15 px-2.5 py-2 text-[11px] font-extrabold text-amber-600 dark:text-amber-300 hover:bg-amber-500/25"
+              className="shrink-0 rounded-xl bg-amber-500/15 px-2 py-2 text-[11px] font-extrabold text-amber-600 dark:text-amber-300 hover:bg-amber-500/25"
               title="AI को टैग करें"
             >
               @dinu
@@ -1404,13 +1866,13 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             <input
               type="text"
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => handleInputChange(e.target.value)}
               placeholder={
                 currentStudent
-                  ? 'डाउट लिखें या फ़ोटो भेजें (@dinu से AI पूछें)...'
+                  ? 'डाउट लिखें, @ से टैग करें, या फ़ोटो/पोल भेजें...'
                   : 'चैट करने के लिए पहले Student Login करें...'
               }
-              className="flex-1 rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
+              className="flex-1 min-w-0 rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
             />
             <button
               type="submit"
@@ -1421,6 +1883,78 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             </button>
           </div>
         </form>
+      )}
+
+      {/* NEET MCQ Poll Builder Modal */}
+      {showPollModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <form
+            onSubmit={handleCreatePoll}
+            className="w-full max-w-sm rounded-3xl border border-slate-700 bg-slate-900 p-4 text-white shadow-2xl space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-emerald-400 flex items-center gap-1.5">
+                <BarChart2 className="w-4 h-4" /> Create NEET MCQ Poll
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowPollModal(false)}
+                className="rounded p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <input
+              type="text"
+              value={pollQuestion}
+              onChange={(e) => setPollQuestion(e.target.value)}
+              placeholder="MCQ प्रश्न लिखें..."
+              className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white focus:border-emerald-400 focus:outline-none"
+              required
+            />
+            <div className="space-y-2">
+              {pollOptions.map((opt, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPollCorrectIdx(pollCorrectIdx === idx ? null : idx)}
+                    className={`h-7 w-7 shrink-0 rounded-lg text-[11px] font-extrabold border ${
+                      pollCorrectIdx === idx
+                        ? 'bg-emerald-500 border-emerald-400 text-slate-950'
+                        : 'bg-slate-800 border-slate-700 text-slate-300'
+                    }`}
+                    title="सही उत्तर चिह्नित करें (वैकल्पिक)"
+                  >
+                    {String.fromCharCode(65 + idx)}
+                  </button>
+                  <input
+                    type="text"
+                    value={opt}
+                    onChange={(e) => {
+                      const next = [...pollOptions];
+                      next[idx] = e.target.value;
+                      setPollOptions(next);
+                    }}
+                    placeholder={`Option ${String.fromCharCode(65 + idx)}${
+                      idx >= 2 ? ' (optional)' : ''
+                    }`}
+                    className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-white focus:border-indigo-400 focus:outline-none"
+                    required={idx < 2}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-[10px] text-slate-400">
+              टिप: सही जवाब सेट करने के लिए A/B/C/D बटन पर टैप करें (हरा हो जाएगा)।
+            </p>
+            <button
+              type="submit"
+              className="w-full rounded-xl bg-emerald-500 py-2 text-xs font-extrabold text-slate-950 hover:bg-emerald-400"
+            >
+              Post Poll in Community
+            </button>
+          </form>
+        </div>
       )}
 
       {/* Admin Unlock PIN Modal */}
@@ -1443,7 +1977,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
               </button>
             </div>
             <p className="text-[11px] text-slate-300">
-              Admin Controls (Pin, Delete, Block/Unblock, Reports) खोलने के लिए PIN डालें:
+              Admin Controls खोलने के लिए PIN डालें:
             </p>
             <input
               type="password"
