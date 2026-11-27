@@ -24,13 +24,21 @@ export const FloatingAiAssistant: React.FC<FloatingAiAssistantProps> = ({ settin
     },
   ]);
 
-  // Draggable Bubble Position (saved in localStorage)
   const [pos, setPos] = useState<{ x: number; y: number }>(() => {
     try {
       const saved = localStorage.getItem('dinu_ai_btn_pos');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          x: Math.min(Math.max(12, parsed.x), Math.max(12, window.innerWidth - 68)),
+          y: Math.min(Math.max(64, parsed.y), Math.max(64, window.innerHeight - 72)),
+        };
+      }
     } catch {}
-    return { x: typeof window !== 'undefined' ? window.innerWidth - 72 : 280, y: 420 };
+    return {
+      x: typeof window !== 'undefined' ? Math.max(12, window.innerWidth - 72) : 240,
+      y: typeof window !== 'undefined' ? Math.min(160, Math.max(72, window.innerHeight - 80)) : 140,
+    };
   });
 
   const draggingRef = useRef(false);
@@ -44,10 +52,10 @@ export const FloatingAiAssistant: React.FC<FloatingAiAssistantProps> = ({ settin
 
   const clampPos = (x: number, y: number) => {
     const maxX = Math.max(12, window.innerWidth - 68);
-    const maxY = Math.max(60, window.innerHeight - 68);
+    const maxY = Math.max(64, window.innerHeight - 72);
     return {
       x: Math.min(Math.max(12, x), maxX),
-      y: Math.min(Math.max(60, y), maxY),
+      y: Math.min(Math.max(64, y), maxY),
     };
   };
 
@@ -92,14 +100,16 @@ export const FloatingAiAssistant: React.FC<FloatingAiAssistantProps> = ({ settin
         {
           id: `${Date.now() + 1}`,
           sender: 'ai',
-          text: '⚠️ अभी आप Offline हैं। DINU AI Doubt Solver के लिए इंटरनेट ऑन करें (बाकी सभी क्विज़ ऑफलाइन चलते रहेंगे)।',
+          text: '⚠️ अभी आप Offline हैं। DINU AI Doubt Solver के लिए इंटरनेट ऑन करें।',
         },
       ]);
       setInput('');
       return;
     }
 
-    const activeKey = settings.apiKey?.trim() || settings.backupApiKey?.trim();
+    const envKey = (import.meta as { env?: Record<string, string> }).env?.VITE_GEMINI_API_KEY?.trim();
+    const activeKey = settings.apiKey?.trim() || settings.backupApiKey?.trim() || envKey;
+
     if (!activeKey) {
       setMessages((prev) => [
         ...prev,
@@ -159,7 +169,6 @@ export const FloatingAiAssistant: React.FC<FloatingAiAssistantProps> = ({ settin
 
   return (
     <>
-      {/* Draggable Floating Bubble named DINU */}
       <button
         type="button"
         onPointerDown={handlePointerDown}
@@ -175,9 +184,8 @@ export const FloatingAiAssistant: React.FC<FloatingAiAssistantProps> = ({ settin
         </span>
       </button>
 
-      {/* DINU AI Doubt Solver Drawer */}
       {isOpen && (
-        <div className="fixed inset-x-3 bottom-20 sm:inset-x-auto sm:right-5 sm:w-96 z-50 flex max-h-[72vh] flex-col rounded-3xl border border-indigo-500/30 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden">
+        <div className="fixed inset-x-3 bottom-16 sm:inset-x-auto sm:right-5 sm:w-96 z-50 flex max-h-[72vh] flex-col rounded-3xl border border-indigo-500/30 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden">
           <div className="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-3 text-white">
             <div className="flex items-center gap-2">
               <Bot className="w-5 h-5 text-amber-300" />
