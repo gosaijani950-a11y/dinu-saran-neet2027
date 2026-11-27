@@ -86,6 +86,10 @@ import {
 } from './components/StudyVaults';
 import { MistakeBank } from './components/MistakeBank';
 import { BackupManager, type ClearTarget } from './components/BackupManager';
+import { useStudentFeatures } from './hooks/useStudentFeatures';
+import { StudentOnboardingModal } from './components/StudentOnboardingModal';
+import { LeaderboardView } from './components/LeaderboardView';
+import { StudyVaultView } from './components/StudyVaultView';
 
 const DEFAULT_QUIZ_CONFIG: QuizConfig = {
   subject: 'All',
@@ -216,6 +220,7 @@ export default function App() {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4200);
   }, []);
+  const studentFeatures = useStudentFeatures(settings, showToast);
 
   // Sync Theme and Global Font Scale on <html>
   useEffect(() => {
@@ -695,6 +700,7 @@ export default function App() {
       await db.quizCheckpoints.delete('active');
       setCheckpoint(null);
       await refreshAllData();
+void studentFeatures.recordQuizInLeaderboard(summary);
 
       setLatestResult(summary);
       setLatestResultQuestions(qs);
@@ -1335,7 +1341,26 @@ export default function App() {
                   onDiscardCheckpoint={() => void handleDiscardCheckpoint()}
                 />
               ))}
-          </motion.div>
+                    {route === 'leaderboard' && (
+            <LeaderboardView
+              currentStudentId={studentFeatures.studentProfile?.id}
+              fetchLeaderboard={studentFeatures.fetchLeaderboardList}
+              onBack={() => setRoute('home')}
+            />
+          )}
+
+          {route === 'study-vault' && (
+            <StudyVaultView
+              isAdmin={role === 'admin'}
+              loadVault={studentFeatures.loadStudyVaultData}
+              onCreateFolder={studentFeatures.createVaultFolder}
+              onDeleteFolder={studentFeatures.deleteVaultFolder}
+              onCreateLink={studentFeatures.createVaultLink}
+              onDeleteLink={studentFeatures.deleteVaultLink}
+              onBack={() => setRoute('home')}
+            />
+          )}
+</motion.div>
         </AnimatePresence>
       </main>
 
@@ -1433,6 +1458,9 @@ export default function App() {
         onOpenSuggestion={() => setSuggestionModalOpen(true)}
         onToast={showToast}
       />
+      {!studentFeatures.studentProfile && role !== 'admin' && (
+        <StudentOnboardingModal onComplete={studentFeatures.saveStudentProfile} />
+      )}
 
       {/* Toast Notification Stack */}
       <div
