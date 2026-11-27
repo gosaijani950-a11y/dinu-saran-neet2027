@@ -44,10 +44,11 @@ const SUBJECTS = ['All', 'Physics', 'Chemistry', 'Biology', 'General'] as const;
 type SubjectTab = (typeof SUBJECTS)[number];
 
 const SERVER_FETCH_LIMIT = 50;
+const AI_AUTO_DELETE_WORD_LIMIT = 120;
+const AI_AUTO_DELETE_DELAY_MS = 90_000;
 const LOCAL_DB_NAME = 'dinu_neet2027_community_db';
 const LOCAL_STORE_NAME = 'messages_vault';
 
-// --- Local IndexedDB Helpers (Stores unlimited full history on user's device) ---
 const openLocalVault = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
     const req = indexedDB.open(LOCAL_DB_NAME, 1);
@@ -92,7 +93,7 @@ const upsertLocalMessages = async (msgs: CommunityMessage[]): Promise<void> => {
       tx.onerror = () => reject(tx.error);
     });
   } catch {
-    // Ignore storage quota issues silently
+    // Ignore quota error
   }
 };
 
@@ -128,7 +129,7 @@ const mergeMessageLists = (
 ): CommunityMessage[] => {
   const map = new Map<string, CommunityMessage>();
   localList.forEach((m) => map.set(m.id, m));
-  serverList.forEach((m) => map.set(m.id, m)); // Server has freshest pin/update state
+  serverList.forEach((m) => map.set(m.id, m));
   return Array.from(map.values()).sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
   );
@@ -215,7 +216,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   }, [settings.supabaseUrl, settings.supabaseAnonKey]);
 
   const syncMessages = async () => {
-    // 1. Load user's full local history immediately so old messages never vanish
     const localHistory = await readAllLocalMessages();
     if (localHistory.length > 0) {
       setMessages(localHistory);
@@ -230,7 +230,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
 
     try {
       setErrorMsg(null);
-      // 2. Fetch latest rolling window + pinned messages from Supabase server
       const [latestRes, pinnedRes] = await Promise.all([
         supabase
           .from('community_messages')
@@ -250,10 +249,8 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       const serverPinned = (pinnedRes.data as CommunityMessage[]) || [];
       const combinedServer = mergeMessageLists(serverLatest, serverPinned);
 
-      // Save newly fetched server messages into user's permanent local DB
       await upsertLocalMessages(combinedServer);
 
-      // Merge user's full local DB with server's latest rolling messages
       const merged = mergeMessageLists(localHistory, combinedServer);
       setMessages(merged);
     } catch (err: any) {
@@ -289,15 +286,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
         }
       )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'community_messages' },
-        async (payload) => {
-          // Note: Auto-trim deletions from server are NOT deleted from user's local vault!
-          // Only explicit user/admin deletes inside the app remove from local DB.
-          void payload;
-        }
-      )
       .subscribe();
 
     return () => {
@@ -310,7 +298,11 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   }, [messages.length, aiThinking]);
 
   const handleClearLocalVault = async () => {
-    if (!window.confirm('क्या आप अपने डिवाइस की पुरानी लोकल चैट हिस्ट्री साफ़ करना चाहते हैं? (सर्वर के लेटेस्ट 50 मैसेज बने रहेंगे)')) {
+    if (
+      !window.confirm(
+        'क्या आप अपने डिवाइस की पुरानी लोकल चैट हिस्ट्री साफ़ करना चाहते हैं? (सर्वर के लेटेस्ट मैसेज बने रहेंगे)'
+      )
+    ) {
       return;
     }
     await clearAllLocalMessages();
@@ -352,7 +344,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     const isOwner = currentStudent && msg.student_id === currentStudent.id && !msg.is_ai;
     if (!adminUnlocked && !isOwner) return;
 
-    // Remove from both user's local DB and Supabase server
     await removeLocalMessage(msg.id);
     setMessages((prev) => prev.filter((m) => m.id !== msg.id));
 
@@ -376,7 +367,9 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       const recentChat = historySnapshot
         .slice(-25)
         .map((m) => {
-          const replyNote = m.reply_to_name ? ` (replying to ${m.reply_to_name}: "${m.reply_to_text}")` : '';
+          const replyNote = m.reply_to_name
+            ? ` (replying to ${m.reply_to_name}: "${m.reply_to_text}")`
+            : '';
           const imgNote = m.image_data ? ' [Attached Image]' : '';
           return `[${m.subject || 'General'}] ${m.is_ai ? 'DINU AI' : m.student_name}${replyNote}${imgNote}: ${m.message}`;
         })
@@ -386,7 +379,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       const systemInstruction =
         'You are DINU AI, the smart NEET UG mentor inside Dinu Saran NEET 2027 Student Community Chat. ' +
         'You have read the recent group conversation and any attached doubt image. ' +
-        'Reply ONLY because a student tagged @dinu. Give a clear, step-by-step NCERT-accurate answer in Hindi + English terms.';
+        'Reply ONLY because a student tagged @dinu. Give a complete, detailed, step-by-step NCERT-accurate answer in Hindi + English terms without cutting off.';
 
       const replyContext = triggerMsg.reply_to_name
         ? `\nReplied-to Message (${triggerMsg.reply_to_name}): ${triggerMsg.reply_to_text}`
@@ -422,6 +415,10 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: systemInstruction }] },
             contents: [{ role: 'user', parts: userParts }],
+            generationConfig: {
+              temperature: 0.4,
+              maxOutputTokens: 4096,
+            },
           }),
         }
       );
@@ -450,7 +447,21 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         .single();
 
       if (aiInserted) {
-        await upsertLocalMessages([aiInserted as CommunityMessage]);
+        const aiMsg = aiInserted as CommunityMessage;
+        await upsertLocalMessages([aiMsg]);
+
+        // Auto-delete from Supabase after 90s if longer than 120 words (stays permanently in Local Vault)
+        const wordCount = replyText.trim().split(/\s+/).length;
+        if (wordCount > AI_AUTO_DELETE_WORD_LIMIT) {
+          setTimeout(() => {
+            supabase
+              .from('community_messages')
+              .delete()
+              .eq('id', aiMsg.id)
+              .eq('is_pinned', false)
+              .then(() => {});
+          }, AI_AUTO_DELETE_DELAY_MS);
+        }
       }
     } catch {
       // Silent fail
@@ -688,7 +699,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                   isMine ? 'ml-auto items-end' : 'mr-auto items-start'
                 }`}
               >
-                {/* Header Row */}
                 <div className="mb-1 flex flex-wrap items-center gap-1.5 px-1 text-[10px] text-slate-500">
                   {msg.is_ai ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 font-extrabold text-amber-600 dark:text-amber-300">
@@ -718,7 +728,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                   )}
                 </div>
 
-                {/* Bubble */}
                 <div
                   className={`rounded-2xl px-3.5 py-2.5 text-xs whitespace-pre-wrap leading-relaxed shadow-sm ${
                     msg.is_ai
@@ -758,7 +767,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                   <div>{msg.message}</div>
                 </div>
 
-                {/* Quick Actions */}
                 <div className="mt-1 flex items-center gap-2 px-1 text-[10px] text-slate-400">
                   <button
                     type="button"
@@ -796,7 +804,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         {aiThinking && (
           <div className="mr-auto flex items-center gap-2 rounded-2xl border border-indigo-500/30 bg-indigo-50/80 dark:bg-indigo-950/60 px-3.5 py-2 text-xs text-indigo-700 dark:text-indigo-200">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            DINU AI चैट और फ़ोटो पढ़कर जवाब तैयार कर रहा है...
+            DINU AI चैट और फ़ोटो पढ़कर पूरा जवाब तैयार कर रहा है...
           </div>
         )}
         <div ref={bottomRef} />
@@ -808,7 +816,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
-      {/* Reply Preview Banner */}
       {replyingTo && (
         <div className="flex items-center justify-between border-t border-slate-200 dark:border-slate-800 bg-indigo-50/80 dark:bg-indigo-950/50 px-3.5 py-1.5 text-[11px]">
           <div className="truncate">
@@ -827,7 +834,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
-      {/* Attached Photo Preview Banner */}
       {attachedImage && (
         <div className="flex items-center justify-between border-t border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-800/80 px-3.5 py-2">
           <div className="flex items-center gap-2">
@@ -850,7 +856,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
-      {/* Input Bar */}
       <form
         onSubmit={handleSend}
         className="flex flex-col gap-1.5 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5"
@@ -920,7 +925,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       </form>
 
-      {/* Fullscreen Image Lightbox */}
       {previewImage && (
         <div
           onClick={() => setPreviewImage(null)}
