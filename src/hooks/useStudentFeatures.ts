@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
-import { getSupabaseClient } from '../services/supabase';
+import { getSupabaseClient } from "../lib/supabase";
+
 import type {
   AppSettings,
   QuizResultSummary,
