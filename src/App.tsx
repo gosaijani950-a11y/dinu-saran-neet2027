@@ -1579,17 +1579,32 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         streak={globalStreak}
         settings={settings}
       />
-      <AiQuizStudioModal
-        isOpen={showAiStudio}
-        onClose={() => setShowAiStudio(false)}
-        onToast={showToast}
-        onSaveToChapterBank={(subj, chap, qs) => {
-          showToast?.(`✅ ${subj} • ${chap} के आपके पर्सनल पूल में ${qs.length} प्रश्न जुड़ गए।`, 'success');
-        }}
-        onStartLiveAttempt={(qs, cfg) => {
-          handlePracticeCustomPool(qs, `${cfg.title} • ${cfg.quizType} (${cfg.durationMins}m)`);
-        }}
-      />
+            {showAiStudio && (
+        <AiQuizStudioModal
+          isOpen={showAiStudio}
+          onClose={() => setShowAiStudio(false)}
+          onToast={(msg, tone) => {
+            try {
+              if (typeof showToast === 'function') showToast(msg, tone);
+            } catch {}
+          }}
+          onSaveToChapterBank={(subj, chap, qs) => {
+            try {
+              if (typeof showToast === 'function') {
+                showToast(`✅ ${subj} • ${chap} के आपके पर्सनल पूल में ${qs.length} प्रश्न जुड़ गए।`, 'success');
+              }
+            } catch {}
+          }}
+          onStartLiveAttempt={(qs, cfg) => {
+            try {
+              if (typeof handlePracticeCustomPool === 'function') {
+                handlePracticeCustomPool(qs, `${cfg.title} • ${cfg.quizType} (${cfg.durationMins}m)`);
+              }
+            } catch {}
+          }}
+        />
+      )}
+
 
       {/* Toast Notification Stack */}
       <div
