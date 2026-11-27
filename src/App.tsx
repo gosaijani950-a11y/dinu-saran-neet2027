@@ -95,6 +95,8 @@ import { CommunityChatView } from './components/CommunityChatView';
 import { Flame, ArrowLeft } from 'lucide-react';
 import { GlobalSafeErrorBoundary, formatNeetExamText } from './utils/neetEngine';
 import { SecretVaultModal } from './components/SecretVaultModal';
+import { StudentProfileModal } from './components/StudentProfileModal';
+
 
 
 const DEFAULT_QUIZ_CONFIG: QuizConfig = {
@@ -219,6 +221,16 @@ export default function App() {
   const batchCoveredRef = useRef<string[]>([]);
   const batchStemsRef = useRef<Set<string>>(new Set());
   const [showSecretHub, setShowSecretHub] = useState(false);
+    const [showMyProfile, setShowMyProfile] = useState(false);
+  const [needsFullOnboarding, setNeedsFullOnboarding] = useState<boolean>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
+      return !(saved.username && saved.mobile && saved.security_code && saved.secret_code);
+    } catch {
+      return true;
+    }
+  });
+
 const [globalStreak, setGlobalStreak] = useState<number>(() => {
   try {
     const raw = JSON.parse(localStorage.getItem('dinu_neet2027_streak_v1') || '{"count":1}');
@@ -1438,6 +1450,8 @@ void studentFeatures.recordQuizInLeaderboard(summary);
           showToast(`Workspace name updated to ${name}.`, 'success');
         }}
         onAdjustFont={handleAdjustFont}
+        onOpenProfile={() => setShowMyProfile(true)}
+
       />
 
       {/* Settings & Cloud Sync Modal */}
@@ -1509,7 +1523,15 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         onToast={showToast}
       />
       {!studentFeatures.studentProfile && role !== 'admin' && (
-        <StudentOnboardingModal onComplete={studentFeatures.saveStudentProfile} />
+        <StudentOnboardingModal
+  isOpen={needsFullOnboarding}
+  settings={settings}
+  onComplete={(prof) => {
+    studentFeatures.saveStudentProfile(prof);
+    setNeedsFullOnboarding(false);
+  }}
+/>
+
       )}
 <FloatingAiAssistant settings={settings} />
 
@@ -1525,6 +1547,13 @@ void studentFeatures.recordQuizInLeaderboard(summary);
   }}
 
 />
+      <StudentProfileModal
+        isOpen={showMyProfile}
+        onClose={() => setShowMyProfile(false)}
+        student={studentFeatures.studentProfile}
+        streak={globalStreak}
+        settings={settings}
+      />
 
       {/* Toast Notification Stack */}
       <div
