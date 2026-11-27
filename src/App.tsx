@@ -96,6 +96,7 @@ import { Flame, ArrowLeft } from 'lucide-react';
 import { GlobalSafeErrorBoundary, formatNeetExamText } from './utils/neetEngine';
 import { SecretVaultModal } from './components/SecretVaultModal';
 import { StudentProfileModal } from './components/StudentProfileModal';
+import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './components/NeetAdvancedTools';
 
 
 
@@ -1139,6 +1140,14 @@ void studentFeatures.recordQuizInLeaderboard(summary);
             transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
           >
             {route === 'home' && (
+            <>
+            <NeetCountdownAndFreezeBar streak={globalStreak} onToast={showToast} />
+<SmartRevisionAndOmrWidget
+  mistakes={mistakes}
+  unifiedQuestionsMap={unifiedQuestionsMap}
+  onLaunchPool={(qs, label) => handlePracticeCustomPool(qs, label)}
+/>
+
               <HomeHub
                 creatorName={settings.creatorName}
                 role={role}
@@ -1151,6 +1160,7 @@ void studentFeatures.recordQuizInLeaderboard(summary);
                 onResumeCheckpoint={() => void handleResumeCheckpoint()}
                 onDiscardCheckpoint={() => void handleDiscardCheckpoint()}
               />
+              </>
             )}
 
             {route === 'quiz-setup' && (
