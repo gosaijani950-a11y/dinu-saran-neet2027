@@ -16,9 +16,11 @@ import {
 import type { MCQQuestion } from '../types';
 
 interface NeetAdvancedToolsProps {
+  questions?: MCQQuestion[];
   allQuestions?: MCQQuestion[];
+  onPracticePool?: (pool: MCQQuestion[], label: string) => void;
   onStartCustomQuiz?: (questions: MCQQuestion[], label: string) => void;
-  onToast?: (msg: string, tone?: 'success' | 'error' | 'info') => void;
+  onToast?: (msg: string, tone?: any) => void;
 }
 
 interface MediaItem {
@@ -68,7 +70,9 @@ function makeSafeMcq(raw: any, idx: number): MCQQuestion {
 }
 
 export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
-  allQuestions = [],
+  questions,
+  allQuestions,
+  onPracticePool,
   onStartCustomQuiz,
   onToast,
 }) => {
@@ -79,9 +83,15 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
   const [omrAnswers, setOmrAnswers] = useState<Record<number, number>>({});
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  const sourceList = Array.isArray(questions)
+    ? questions
+    : Array.isArray(allQuestions)
+    ? allQuestions
+    : [];
+
   const safeBank = useMemo(
-    () => (Array.isArray(allQuestions) ? allQuestions.filter(Boolean).map((q, i) => makeSafeMcq(q, i)) : []),
-    [allQuestions]
+    () => sourceList.filter(Boolean).map((q, i) => makeSafeMcq(q, i)),
+    [sourceList]
   );
 
   const handleUploadMedia = async (files: FileList | null) => {
@@ -168,8 +178,9 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
         onToast?.('चलाने के लिए प्रश्न उपलब्ध नहीं हैं।', 'error');
         return;
       }
-      if (typeof onStartCustomQuiz === 'function') {
-        onStartCustomQuiz(valid, title);
+      const launcher = onPracticePool || onStartCustomQuiz;
+      if (typeof launcher === 'function') {
+        launcher(valid, title);
       }
     } catch {
       onToast?.('लाइव क्विज़ शुरू करने में समस्या आई।', 'error');
