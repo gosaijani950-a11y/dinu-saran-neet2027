@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { getSupabaseClient } from "../lib/supabase";
+import { getSupabaseClient } from "../services/supabaseService";
 
 import type {
   AppSettings,
