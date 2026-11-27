@@ -1341,13 +1341,15 @@ void studentFeatures.recordQuizInLeaderboard(summary);
                   onDiscardCheckpoint={() => void handleDiscardCheckpoint()}
                 />
               ))}
-                    {route === 'leaderboard' && (
-            <LeaderboardView
-              currentStudentId={studentFeatures.studentProfile?.id}
-              fetchLeaderboard={studentFeatures.fetchLeaderboardList}
-              onBack={() => setRoute('home')}
-            />
-          )}
+                                  {route === 'leaderboard' && (
+              <LeaderboardView
+                currentStudent={studentFeatures.studentProfile}
+                fetchLeaderboard={studentFeatures.fetchLeaderboardList}
+                fetchGroupLeaderboard={studentFeatures.fetchGroupLeaderboard}
+                createOrJoinGroup={studentFeatures.createOrJoinGroup}
+              />
+            )}
+
 
           {route === 'study-vault' && (
             <StudyVaultView
