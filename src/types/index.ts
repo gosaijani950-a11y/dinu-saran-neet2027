@@ -355,6 +355,7 @@ export interface BackupPayload {
     quizHistory: QuizResultSummary[];
     customSubjects: string[];
   };
+}
 
   export interface StudentProfile {
   id: string;
@@ -385,4 +386,3 @@ export interface StudyVaultLink {
   created_at?: string;
 }
 
-}
