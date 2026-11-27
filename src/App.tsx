@@ -91,6 +91,7 @@ import { StudentOnboardingModal } from './components/StudentOnboardingModal';
 import { LeaderboardView } from './components/LeaderboardView';
 import { StudyVaultView } from './components/StudyVaultView';
 import { FloatingAiAssistant } from './components/FloatingAiAssistant';
+import { CommunityChatView } from './components/CommunityChatView';
 
 const DEFAULT_QUIZ_CONFIG: QuizConfig = {
   subject: 'All',
@@ -1363,6 +1364,14 @@ void studentFeatures.recordQuizInLeaderboard(summary);
               onBack={() => setRoute('home')}
             />
           )}
+            {route === 'community' && (
+  <CommunityChatView
+    currentStudent={studentFeatures.studentProfile}
+    settings={settings}
+    onRequireLogin={() => showToast('चैट करने के लिए पहले अपना Student Profile सेव करें।', 'info')}
+  />
+)}
+
 </motion.div>
         </AnimatePresence>
       </main>
