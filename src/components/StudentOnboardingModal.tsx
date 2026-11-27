@@ -40,7 +40,7 @@ export const StudentOnboardingModal: React.FC<Props> = ({
     try {
       const env = (import.meta as unknown as { env?: Record<string, string> })?.env || {};
       const u = String(settings?.supabaseUrl || env.VITE_SUPABASE_URL || 'https://twcpuqcgowjwmkruohqw.supabase.co').trim();
-      const k = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || '').trim();
+      const k = String(settings?.supabaseAnonKey || env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_5JxNjgYP025of9f0LTusBw_FqHHrzmn').trim();
       return u && k && u.startsWith('http') ? createClient(u, k) : null;
     } catch {
       return null;
