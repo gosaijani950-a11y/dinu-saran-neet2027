@@ -168,9 +168,16 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         .from('community_messages')
         .insert([
           {
-            student_id: currentStudent.id,
-            student_name: currentStudent.name,
-            batch_name: currentStudent.batch || 'NEET 2027',
+            student_id: String((currentStudent as any).id || (currentStudent as any).uid || 'student-user'),
+student_name:
+  (currentStudent as any).name ||
+  (currentStudent as any).fullName ||
+  (currentStudent as any).studentName ||
+  (currentStudent as any).displayName ||
+  (currentStudent as any).username ||
+  'NEET Aspirant',
+batch_name: (currentStudent as any).batch || (currentStudent as any).targetYear || 'NEET 2027',
+
             is_ai: false,
             message: text,
           },
