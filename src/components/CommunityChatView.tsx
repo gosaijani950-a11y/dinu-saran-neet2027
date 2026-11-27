@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Component, ErrorInfo, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
   Send,
@@ -24,9 +24,61 @@ import {
   Award,
   BarChart2,
   CheckCircle2,
+  Bookmark,
+  Flame,
+  Trophy,
+  Zap,
+  Megaphone,
+  Clock,
+  ChevronUp,
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
 
+/* ============================================================================
+   1. GLOBAL ERROR BOUNDARY (0.0001% Crash Guarantee)
+============================================================================ */
+interface ErrorBoundaryState {
+  hasError: boolean;
+  errorText: string;
+}
+
+class SafeCommunityBoundary extends Component<{ children: ReactNode }, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { hasError: false, errorText: '' };
+
+  static getDerivedStateFromError(err: Error): ErrorBoundaryState {
+    return { hasError: true, errorText: err?.message || 'Unexpected UI error' };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Community Safe Recovery:', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="mx-auto my-8 max-w-md rounded-3xl border border-amber-500/40 bg-slate-900 p-6 text-center text-white shadow-xl space-y-3">
+          <AlertTriangle className="mx-auto h-10 w-10 text-amber-400" />
+          <h3 className="text-base font-extrabold">Safe Recovery Mode Active</h3>
+          <p className="text-xs text-slate-300">
+            आपका लोकल चैट डेटा पूरी तरह सुरक्षित है। एक टैप में दोबारा शुरू करें:
+          </p>
+          <button
+            type="button"
+            onClick={() => this.setState({ hasError: false, errorText: '' })}
+            className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-extrabold text-white hover:bg-indigo-500"
+          >
+            Reload Community Smoothly
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/* ============================================================================
+   2. TYPES & CONSTANTS
+============================================================================ */
 export interface PollData {
   question: string;
   options: string[];
@@ -85,12 +137,68 @@ const SUBJECTS = ['All', 'Physics', 'Chemistry', 'Biology', 'General'] as const;
 type SubjectTab = (typeof SUBJECTS)[number];
 
 const SERVER_FETCH_LIMIT = 50;
+const RENDER_PAGE_SIZE = 50;
 const AI_AUTO_DELETE_WORD_LIMIT = 120;
 const AI_AUTO_DELETE_DELAY_MS = 90_000;
 const AUTO_DELETE_REPORT_THRESHOLD = 7;
+
 const LOCAL_DB_NAME = 'dinu_neet2027_community_db';
 const LOCAL_STORE_NAME = 'messages_vault';
+const BOOKMARKS_KEY = 'dinu_neet2027_bookmarks_v1';
+const STREAK_KEY = 'dinu_neet2027_streak_v1';
+const ANNOUNCEMENT_KEY = 'dinu_neet2027_announcement_v1';
+const SLOWMODE_KEY = 'dinu_neet2027_slowmode_v1';
 
+/* ============================================================================
+   3. CURATED RAPID-FIRE NEET PYQ BANK (Instant 1-Click Polls)
+============================================================================ */
+const INSTANT_PYQ_BANK: Array<{
+  subject: Exclude<SubjectTab, 'All'>;
+  question: string;
+  options: string[];
+  correctIndex: number;
+}> = [
+  {
+    subject: 'Biology',
+    question: '[NEET PYQ] Which enzyme joins Okazaki fragments during DNA replication?',
+    options: ['DNA Polymerase I', 'DNA Ligase', 'Helicase', 'Primase'],
+    correctIndex: 1,
+  },
+  {
+    subject: 'Biology',
+    question: '[NEET PYQ] Kranz anatomy is characteristic of leaves of:',
+    options: ['C3 plants', 'C4 plants', 'CAM plants', 'Hydrophytes'],
+    correctIndex: 1,
+  },
+  {
+    subject: 'Chemistry',
+    question: '[NEET PYQ] Which of the following shows the highest acidic strength?',
+    options: ['p-Nitrophenol', 'p-Cresol', 'Phenol', 'Ethanol'],
+    correctIndex: 0,
+  },
+  {
+    subject: 'Chemistry',
+    question: '[NEET PYQ] Hybridization of XeF4 is:',
+    options: ['sp3', 'sp3d', 'sp3d2', 'dsp2'],
+    correctIndex: 2,
+  },
+  {
+    subject: 'Physics',
+    question: '[NEET PYQ] Dimensional formula of Planck’s constant (h) is identical to:',
+    options: ['Linear momentum', 'Angular momentum', 'Torque', 'Power'],
+    correctIndex: 1,
+  },
+  {
+    subject: 'Physics',
+    question: '[NEET PYQ] Escape velocity from Earth is 11.2 km/s. If mass of planet is 2M and radius is 2R, escape velocity is:',
+    options: ['11.2 km/s', '22.4 km/s', '5.6 km/s', '15.8 km/s'],
+    correctIndex: 0,
+  },
+];
+
+/* ============================================================================
+   4. PRE-SEND ABUSE GUARD & FORMULA FORMATTER
+============================================================================ */
 const BANNED_PATTERNS: RegExp[] = [
   /\b(madarchod|behenchod|bhenchod|bhosdike|bhosdiwale|chutiya|chutiye|gandu|randi|harami|haramkhor|kamina|kamine|laude|lode|lawde|lund|chut|bsdk|mc|bc)\b/i,
   /\b(fuck|fucking|motherfucker|bitch|bastard|asshole|dickhead|slut|whore)\b/i,
@@ -110,6 +218,49 @@ const containsAbuseOrSpam = (text: string): string | null => {
   return null;
 };
 
+const formatScientificText = (raw: string): string => {
+  const subMap: Record<string, string> = {
+    '0': '₀',
+    '1': '₁',
+    '2': '₂',
+    '3': '₃',
+    '4': '₄',
+    '5': '₅',
+    '6': '₆',
+    '7': '₇',
+    '8': '₈',
+    '9': '₉',
+  };
+  const supMap: Record<string, string> = {
+    '0': '⁰',
+    '1': '¹',
+    '2': '²',
+    '3': '³',
+    '4': '⁴',
+    '5': '⁵',
+    '6': '⁶',
+    '7': '⁷',
+    '8': '⁸',
+    '9': '⁹',
+    '+': '⁺',
+    '-': '⁻',
+  };
+
+  return raw
+    .replace(/->/g, '→')
+    .replace(/<->/g, '⇌')
+    .replace(/\b([A-Z][a-z]?)(\d)(?=[A-Z0-9\s,.)]|$)/g, (_, el, d) => `${el}${subMap[d] || d}`)
+    .replace(/\^([0-9+-]+)/g, (_, exp) =>
+      exp
+        .split('')
+        .map((c: string) => supMap[c] || c)
+        .join('')
+    );
+};
+
+/* ============================================================================
+   5. INDEXEDDB VAULT HELPERS
+============================================================================ */
 const openLocalVault = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
     const req = indexedDB.open(LOCAL_DB_NAME, 1);
@@ -202,7 +353,7 @@ const compressImageToBase64 = (file: File): Promise<string> =>
     reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        const maxDim = 960;
+        const maxDim = 900;
         let { width, height } = img;
         if (width > maxDim || height > maxDim) {
           if (width > height) {
@@ -219,7 +370,7 @@ const compressImageToBase64 = (file: File): Promise<string> =>
         const ctx = canvas.getContext('2d');
         if (!ctx) return reject(new Error('Canvas error'));
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.72));
+        resolve(canvas.toDataURL('image/jpeg', 0.68));
       };
       img.onerror = reject;
       img.src = reader.result as string;
@@ -228,13 +379,17 @@ const compressImageToBase64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
+/* ============================================================================
+   6. MAIN COMMUNITY COMPONENT
+============================================================================ */
+const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
   currentStudent,
   settings,
   onRequireLogin,
   isAdmin = false,
 }) => {
   const [messages, setMessages] = useState<CommunityMessage[]>([]);
+  const [renderLimit, setRenderLimit] = useState<number>(RENDER_PAGE_SIZE);
   const [blocks, setBlocks] = useState<CommunityBlock[]>([]);
   const [reports, setReports] = useState<CommunityReport[]>([]);
   const [input, setInput] = useState('');
@@ -243,20 +398,53 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   const [selectedSubject, setSelectedSubject] = useState<SubjectTab>('All');
   const [postSubject, setPostSubject] = useState<Exclude<SubjectTab, 'All'>>('General');
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
+  const [showSavedOnly, setShowSavedOnly] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
   const [showModPanel, setShowModPanel] = useState(false);
   const [showAdminPinModal, setShowAdminPinModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
 
+  // Bookmarks & Study Streak (Local-First)
+  const [bookmarkedIds, setBookmarkedIds] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(BOOKMARKS_KEY) || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const [studyStreak, setStudyStreak] = useState<number>(1);
+
+  // Admin Live Announcement & Slow-Mode
+  const [announcement, setAnnouncement] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ANNOUNCEMENT_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [announcementDraft, setAnnouncementDraft] = useState('');
+  const [slowModeSeconds, setSlowModeSeconds] = useState<number>(() => {
+    try {
+      return Number(localStorage.getItem(SLOWMODE_KEY) || '0');
+    } catch {
+      return 0;
+    }
+  });
+  const [lastSentAt, setLastSentAt] = useState<number>(0);
+
+  // Poll Builder Modal state
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '', '', '']);
   const [pollCorrectIdx, setPollCorrectIdx] = useState<number | null>(null);
 
+  // Realtime Presence & Typing state
   const [onlineCount, setOnlineCount] = useState<number>(1);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const channelRef = useRef<any>(null);
   const lastTypingSentRef = useRef<number>(0);
 
+  // Mention Autocomplete state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
 
   const [blockTarget, setBlockTarget] = useState<{ studentId: string; studentName: string } | null>(
@@ -294,6 +482,24 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       'NEET Aspirant'
     );
   }, [currentStudent]);
+
+  // Daily Study Streak tracker
+  useEffect(() => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const raw = JSON.parse(localStorage.getItem(STREAK_KEY) || '{"date":"","count":0}');
+      if (raw.date === today) {
+        setStudyStreak(Math.max(1, raw.count));
+      } else {
+        const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+        const nextCount = raw.date === yesterday ? raw.count + 1 : 1;
+        localStorage.setItem(STREAK_KEY, JSON.stringify({ date: today, count: nextCount }));
+        setStudyStreak(nextCount);
+      }
+    } catch {
+      setStudyStreak(1);
+    }
+  }, []);
 
   useEffect(() => {
     const detectAdmin = async () => {
@@ -437,7 +643,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       ? String(currentStudent.id)
       : `guest-${Math.random().toString(36).slice(2, 8)}`;
 
-    const channel = supabase.channel('public:community_pro_v5', {
+    const channel = supabase.channel('public:community_ultra_v6', {
       config: { presence: { key: presenceKey } },
     });
 
@@ -472,6 +678,20 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         { event: '*', schema: 'public', table: 'community_reports' },
         () => fetchModerationData()
       )
+      .on('broadcast', { event: 'admin_config' }, ({ payload }) => {
+        if (payload?.announcement !== undefined) {
+          setAnnouncement(payload.announcement);
+          try {
+            localStorage.setItem(ANNOUNCEMENT_KEY, payload.announcement);
+          } catch {}
+        }
+        if (payload?.slowModeSeconds !== undefined) {
+          setSlowModeSeconds(Number(payload.slowModeSeconds) || 0);
+          try {
+            localStorage.setItem(SLOWMODE_KEY, String(payload.slowModeSeconds || 0));
+          } catch {}
+        }
+      })
       .on('presence', { event: 'sync' }, () => {
         const state = channel.presenceState();
         const keys = Object.keys(state);
@@ -506,10 +726,10 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   }, [supabase, currentStudent?.id, myDisplayName]);
 
   useEffect(() => {
-    if (!searchQuery.trim()) {
+    if (!searchQuery.trim() && !showSavedOnly) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages.length, aiThinking, searchQuery]);
+  }, [messages.length, aiThinking, searchQuery, showSavedOnly]);
 
   const notifyTyping = (isTyping: boolean) => {
     if (!channelRef.current || !currentStudent) return;
@@ -525,14 +745,51 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       .catch(() => {});
   };
 
-  const helpfulLeaderboard = useMemo(() => {
-    const counts = new Map<string, number>();
-    messages.forEach((m) => {
-      if (!m.is_ai && Array.isArray(m.helpful_by) && m.helpful_by.length > 0) {
-        counts.set(m.student_id, (counts.get(m.student_id) || 0) + m.helpful_by.length);
-      }
+  // Toggle Bookmark into Personal Revision Vault
+  const toggleBookmark = (msgId: string) => {
+    setBookmarkedIds((prev) => {
+      const next = { ...prev };
+      if (next[msgId]) delete next[msgId];
+      else next[msgId] = true;
+      try {
+        localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(next));
+      } catch {}
+      return next;
     });
-    return counts;
+  };
+
+  const savedCount = useMemo(
+    () => messages.filter((m) => !!bookmarkedIds[m.id]).length,
+    [messages, bookmarkedIds]
+  );
+
+  // Weekly XP Leaderboard + Doubt Solver Scores
+  const { helpfulLeaderboard, weeklyToppers } = useMemo(() => {
+    const helpfulMap = new Map<string, number>();
+    const xpMap = new Map<string, { id: string; name: string; xp: number; solved: number }>();
+
+    messages.forEach((m) => {
+      if (m.is_ai) return;
+      const helpfulCount = Array.isArray(m.helpful_by) ? m.helpful_by.length : 0;
+      if (helpfulCount > 0) {
+        helpfulMap.set(m.student_id, (helpfulMap.get(m.student_id) || 0) + helpfulCount);
+      }
+      const prev = xpMap.get(m.student_id) || {
+        id: m.student_id,
+        name: m.student_name,
+        xp: 0,
+        solved: 0,
+      };
+      prev.xp += 10 + helpfulCount * 25 + (m.poll_data ? 15 : 0);
+      prev.solved += helpfulCount;
+      xpMap.set(m.student_id, prev);
+    });
+
+    const toppers = Array.from(xpMap.values())
+      .sort((a, b) => b.xp - a.xp)
+      .slice(0, 5);
+
+    return { helpfulLeaderboard: helpfulMap, weeklyToppers: toppers };
   }, [messages]);
 
   const mentionCandidates = useMemo(() => {
@@ -597,6 +854,63 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         .from('community_messages')
         .update({ helpful_by: updatedList })
         .eq('id', msg.id);
+    }
+  };
+
+  // Instant 1-Click NEET PYQ Dropper
+  const handleDropRandomPyq = async () => {
+    if (!currentStudent) {
+      onRequireLogin();
+      return;
+    }
+    if (!supabase || sending) return;
+
+    const pool =
+      selectedSubject !== 'All' && selectedSubject !== 'General'
+        ? INSTANT_PYQ_BANK.filter((p) => p.subject === selectedSubject)
+        : INSTANT_PYQ_BANK;
+    const picked = pool[Math.floor(Math.random() * pool.length)] || INSTANT_PYQ_BANK[0];
+
+    const displayBatch = adminUnlocked
+      ? 'Admin'
+      : currentStudent.attempt_status || 'NEET 2027';
+
+    const pollPayload: PollData = {
+      question: picked.question,
+      options: picked.options,
+      votes: {},
+      correctIndex: picked.correctIndex,
+    };
+
+    setSending(true);
+    try {
+      const { data, error } = await supabase
+        .from('community_messages')
+        .insert([
+          {
+            student_id: String(currentStudent.id),
+            student_name: myDisplayName,
+            batch_name: displayBatch,
+            subject: picked.subject,
+            is_admin_msg: adminUnlocked,
+            is_ai: false,
+            message: `⚡ ${picked.question}`,
+            poll_data: pollPayload,
+          },
+        ])
+        .select()
+        .single();
+
+      if (error) throw error;
+      if (data) {
+        const inserted = data as CommunityMessage;
+        await upsertLocalMessages([inserted]);
+        setMessages((prev) => mergeMessageLists(prev, [inserted]));
+      }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'PYQ पोल डालने में समस्या आई।');
+    } finally {
+      setSending(false);
     }
   };
 
@@ -689,6 +1003,35 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       .from('community_messages')
       .update({ poll_data: updatedPoll })
       .eq('id', msg.id);
+  };
+
+  // Admin Broadcast Announcement & Slow-Mode
+  const handleSaveAdminBroadcast = () => {
+    if (!adminUnlocked) return;
+    const clean = announcementDraft.trim();
+    setAnnouncement(clean);
+    setAnnouncementDraft('');
+    try {
+      localStorage.setItem(ANNOUNCEMENT_KEY, clean);
+    } catch {}
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'admin_config',
+      payload: { announcement: clean, slowModeSeconds },
+    });
+  };
+
+  const handleToggleSlowMode = (secs: number) => {
+    if (!adminUnlocked) return;
+    setSlowModeSeconds(secs);
+    try {
+      localStorage.setItem(SLOWMODE_KEY, String(secs));
+    } catch {}
+    channelRef.current?.send({
+      type: 'broadcast',
+      event: 'admin_config',
+      payload: { announcement, slowModeSeconds: secs },
+    });
   };
 
   const myActiveBlock = useMemo(() => {
@@ -1011,6 +1354,15 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       return;
     }
 
+    // Slow-Mode check (skipped for Admin)
+    if (!adminUnlocked && slowModeSeconds > 0 && lastSentAt > 0) {
+      const elapsedSec = Math.floor((Date.now() - lastSentAt) / 1000);
+      if (elapsedSec < slowModeSeconds) {
+        setErrorMsg(`Slow-Mode चालू है: कृपया ${slowModeSeconds - elapsedSec} सेकंड प्रतीक्षा करें।`);
+        return;
+      }
+    }
+
     if (!adminUnlocked && text) {
       const violation = containsAbuseOrSpam(text);
       if (violation) {
@@ -1025,6 +1377,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     }
 
     setSending(true);
+    setLastSentAt(Date.now());
     notifyTyping(false);
     setMentionQuery(null);
     const currentImage = attachedImage;
@@ -1093,9 +1446,10 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
 
   const pinnedMessages = useMemo(() => messages.filter((m) => m.is_pinned), [messages]);
 
-  const visibleMessages = useMemo(() => {
+  const filteredAllMessages = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return messages.filter((m) => {
+      if (showSavedOnly && !bookmarkedIds[m.id]) return false;
       if (showPinnedOnly && !m.is_pinned) return false;
       if (selectedSubject !== 'All' && (m.subject || 'General') !== selectedSubject) {
         return false;
@@ -1108,7 +1462,15 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       }
       return true;
     });
-  }, [messages, selectedSubject, showPinnedOnly, searchQuery]);
+  }, [messages, selectedSubject, showPinnedOnly, showSavedOnly, bookmarkedIds, searchQuery]);
+
+  // Windowed slice for 60fps zero-lag rendering
+  const visibleMessages = useMemo(() => {
+    if (filteredAllMessages.length <= renderLimit) return filteredAllMessages;
+    return filteredAllMessages.slice(-renderLimit);
+  }, [filteredAllMessages, renderLimit]);
+
+  const hasOlderMessages = filteredAllMessages.length > visibleMessages.length;
 
   const subjectBadgeColor = (subj?: string) => {
     switch (subj) {
@@ -1140,17 +1502,23 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   return (
     <div className="mx-auto flex h-[calc(100vh-115px)] max-w-2xl flex-col rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600 px-3.5 py-2.5 text-white">
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-white/15">
-            <Users className="w-5 h-5" />
+      <div className="flex items-center justify-between bg-gradient-to-r from-indigo-600 to-purple-600 px-3 py-2 text-white">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-2xl bg-white/15">
+            <Users className="w-4 h-4" />
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h2 className="text-sm font-extrabold">NEET 2027 Community</h2>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <h2 className="text-xs sm:text-sm font-extrabold truncate">NEET 2027 Hub</h2>
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-400/20 px-1.5 py-0.5 text-[9px] font-bold text-emerald-200">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                {onlineCount} Online
+                {onlineCount}
+              </span>
+              <span
+                className="inline-flex items-center gap-0.5 rounded-full bg-orange-500/25 px-1.5 py-0.5 text-[9px] font-extrabold text-orange-200"
+                title="Your Daily Study Streak"
+              >
+                <Flame className="w-2.5 h-2.5 text-orange-300" /> {studyStreak}d
               </span>
               {adminUnlocked && (
                 <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-400/25 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
@@ -1164,14 +1532,25 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-0.5">
+
+        <div className="flex items-center gap-0.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowLeaderboard((l) => !l)}
+            className={`rounded-xl p-1.5 hover:bg-white/15 ${
+              showLeaderboard ? 'bg-white/20 text-amber-300' : 'text-indigo-100'
+            }`}
+            title="Weekly NEET Toppers Leaderboard"
+          >
+            <Trophy className="w-4 h-4" />
+          </button>
           <button
             type="button"
             onClick={() => {
               setShowSearchBar((s) => !s);
               if (showSearchBar) setSearchQuery('');
             }}
-            className={`rounded-xl p-2 hover:bg-white/15 ${
+            className={`rounded-xl p-1.5 hover:bg-white/15 ${
               showSearchBar ? 'bg-white/20 text-amber-300' : 'text-indigo-100'
             }`}
             title="Search in Local Vault"
@@ -1182,17 +1561,17 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             <button
               type="button"
               onClick={() => setShowModPanel((p) => !p)}
-              className="rounded-xl bg-amber-400/20 border border-amber-300/40 px-2 py-1.5 text-[10px] font-extrabold text-amber-200 hover:bg-amber-400/30 flex items-center gap-1"
-              title="Blocked Users & Student Reports"
+              className="rounded-xl bg-amber-400/20 border border-amber-300/40 px-2 py-1 text-[10px] font-extrabold text-amber-200 hover:bg-amber-400/30 flex items-center gap-1"
+              title="Admin Controls, Reports & Blocks"
             >
-              <AlertTriangle className="w-3.5 h-3.5" />
+              <AlertTriangle className="w-3 h-3" />
               <span>Mod ({reports.length + activeBlockMap.size})</span>
             </button>
           ) : (
             <button
               type="button"
               onClick={() => setShowAdminPinModal(true)}
-              className="rounded-xl p-2 hover:bg-white/15 text-indigo-100"
+              className="rounded-xl p-1.5 hover:bg-white/15 text-indigo-100"
               title="Admin Controls Unlock"
             >
               <KeyRound className="w-4 h-4" />
@@ -1200,22 +1579,72 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           )}
           <button
             type="button"
-            onClick={handleClearLocalVault}
-            className="rounded-xl p-2 hover:bg-white/15 text-indigo-100"
-            title="Clear Local Device Chat History"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
             onClick={syncMessages}
-            className="rounded-xl p-2 hover:bg-white/15"
+            className="rounded-xl p-1.5 hover:bg-white/15"
             title="Sync Latest Chats"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
       </div>
+
+      {/* Live Daily Target / Admin Broadcast Banner */}
+      {announcement && (
+        <div className="flex items-center justify-between border-b border-indigo-500/20 bg-gradient-to-r from-amber-500/15 via-indigo-500/10 to-purple-500/15 px-3.5 py-1.5 text-[11px] text-slate-800 dark:text-amber-200">
+          <span className="flex items-center gap-1.5 font-bold truncate">
+            <Megaphone className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+            <span className="truncate">{announcement}</span>
+          </span>
+          {slowModeSeconds > 0 && (
+            <span className="ml-2 shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[9px] text-amber-300">
+              Slow: {slowModeSeconds}s
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Weekly XP Toppers Drawer */}
+      {showLeaderboard && (
+        <div className="border-b border-amber-500/30 bg-slate-900 text-white p-3 text-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-extrabold text-amber-400 flex items-center gap-1.5">
+              <Trophy className="w-4 h-4" /> Top NEET Contributors & Doubt Solvers
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowLeaderboard(false)}
+              className="rounded p-1 hover:bg-slate-800"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {weeklyToppers.length === 0 ? (
+            <p className="text-[11px] text-slate-400">
+              डाउट्स पूछें, पोल हल करें और Helpful अपवोट्स पाकर टॉप पर आएं!
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-1.5">
+              {weeklyToppers.map((t, i) => (
+                <div
+                  key={t.id}
+                  className="flex items-center justify-between rounded-xl bg-slate-800/90 px-3 py-1.5"
+                >
+                  <span className="font-bold flex items-center gap-2">
+                    <span className="text-amber-400 font-extrabold">#{i + 1}</span>
+                    <span>{t.name}</span>
+                    {t.solved >= 2 && (
+                      <span className="rounded bg-emerald-500/20 px-1.5 py-0.2 text-[9px] text-emerald-300">
+                        Doubt Solver
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-[11px] font-extrabold text-indigo-300">{t.xp} XP</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Local Vault Instant Search Bar */}
       {showSearchBar && (
@@ -1241,12 +1670,12 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
-      {/* Admin Moderation Drawer */}
+      {/* Admin Super-Moderation Drawer */}
       {adminUnlocked && showModPanel && (
-        <div className="max-h-64 overflow-y-auto border-b border-amber-500/30 bg-slate-900 text-slate-100 p-3 text-xs space-y-3">
+        <div className="max-h-72 overflow-y-auto border-b border-amber-500/30 bg-slate-900 text-slate-100 p-3 text-xs space-y-3">
           <div className="flex items-center justify-between">
             <span className="font-extrabold text-amber-300 flex items-center gap-1.5">
-              <ShieldCheck className="w-4 h-4" /> Admin Moderation Control
+              <ShieldCheck className="w-4 h-4" /> Admin Super-Control Panel
             </span>
             <button
               type="button"
@@ -1257,6 +1686,71 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             </button>
           </div>
 
+          {/* Broadcast Daily Target */}
+          <div className="rounded-xl bg-slate-800/80 p-2.5 space-y-1.5">
+            <div className="text-[11px] font-bold text-indigo-300 flex items-center gap-1">
+              <Megaphone className="w-3.5 h-3.5" /> Set Live Daily Target / Notice
+            </div>
+            <div className="flex gap-1.5">
+              <input
+                type="text"
+                value={announcementDraft}
+                onChange={(e) => setAnnouncementDraft(e.target.value)}
+                placeholder={announcement || 'उदा: आज का टारगेट - 50 Biology PYQs...'}
+                className="flex-1 rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-[11px] text-white"
+              />
+              <button
+                type="button"
+                onClick={handleSaveAdminBroadcast}
+                className="rounded-lg bg-indigo-600 px-2.5 py-1 text-[10px] font-bold text-white"
+              >
+                Set
+              </button>
+              {announcement && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnnouncement('');
+                    localStorage.removeItem(ANNOUNCEMENT_KEY);
+                  }}
+                  className="rounded-lg bg-slate-700 px-2 py-1 text-[10px] text-slate-300"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Slow-Mode & Local Vault Reset */}
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-800/80 p-2.5">
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <Clock className="w-3.5 h-3.5 text-amber-400" />
+              <span>Slow-Mode:</span>
+              {[0, 10, 30].map((sec) => (
+                <button
+                  key={sec}
+                  type="button"
+                  onClick={() => handleToggleSlowMode(sec)}
+                  className={`rounded px-2 py-0.5 text-[10px] font-bold ${
+                    slowModeSeconds === sec
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-700 text-slate-300'
+                  }`}
+                >
+                  {sec === 0 ? 'Off' : `${sec}s`}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={handleClearLocalVault}
+              className="rounded bg-slate-700 px-2 py-1 text-[10px] text-rose-300 hover:bg-rose-600 hover:text-white"
+            >
+              Reset Local Cache
+            </button>
+          </div>
+
+          {/* Blocked Students */}
           <div>
             <div className="text-[11px] font-bold text-rose-400 mb-1">
               Blocked Students ({activeBlockMap.size})
@@ -1289,6 +1783,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             )}
           </div>
 
+          {/* Student Reports */}
           <div>
             <div className="text-[11px] font-bold text-amber-400 mb-1">
               Student Reports ({reports.length}) — 7 reports = Auto-Delete
@@ -1309,7 +1804,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                           {rep.reported_student_name} •{' '}
                           <span className="text-amber-300">{rep.reason}</span>{' '}
                           <span className="rounded bg-rose-500/20 px-1.5 py-0.2 text-[9px] text-rose-200">
-                            {totalOnMsg}/7 reports
+                            {totalOnMsg}/7
                           </span>
                         </span>
                         <span className="text-[10px] text-slate-400">by {rep.reporter_name}</span>
@@ -1345,20 +1840,21 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
-      {/* Subject Filter & Pinned Bar */}
+      {/* Subject Filter, Saved Vault & Pinned Bar */}
       <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/90 px-3 py-2 no-scrollbar">
         {SUBJECTS.map((subj) => {
-          const active = !showPinnedOnly && selectedSubject === subj;
+          const active = !showPinnedOnly && !showSavedOnly && selectedSubject === subj;
           return (
             <button
               key={subj}
               type="button"
               onClick={() => {
                 setShowPinnedOnly(false);
+                setShowSavedOnly(false);
                 setSelectedSubject(subj);
                 if (subj !== 'All') setPostSubject(subj);
               }}
-              className={`shrink-0 rounded-full px-3 py-1 text-[11px] font-bold transition ${
+              className={`shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
                 active
                   ? 'bg-indigo-600 text-white shadow-sm'
                   : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
@@ -1370,8 +1866,25 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         })}
         <button
           type="button"
-          onClick={() => setShowPinnedOnly((prev) => !prev)}
-          className={`ml-auto shrink-0 inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-bold transition ${
+          onClick={() => {
+            setShowSavedOnly((prev) => !prev);
+            setShowPinnedOnly(false);
+          }}
+          className={`shrink-0 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
+            showSavedOnly
+              ? 'bg-emerald-600 text-white'
+              : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+          }`}
+        >
+          <Bookmark className="w-3 h-3" /> Saved ({savedCount})
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setShowPinnedOnly((prev) => !prev);
+            setShowSavedOnly(false);
+          }}
+          className={`shrink-0 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold transition ${
             showPinnedOnly
               ? 'bg-amber-500 text-white'
               : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
@@ -1382,7 +1895,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       </div>
 
       {/* Top Pinned Banner */}
-      {!showPinnedOnly && pinnedMessages.length > 0 && (
+      {!showPinnedOnly && !showSavedOnly && pinnedMessages.length > 0 && (
         <button
           type="button"
           onClick={() => setShowPinnedOnly(true)}
@@ -1399,8 +1912,21 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </button>
       )}
 
-      {/* Messages Feed */}
+      {/* Messages Feed (Windowed 60fps Virtualized List) */}
       <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-slate-50/70 dark:bg-slate-950/60">
+        {hasOlderMessages && (
+          <div className="flex justify-center pb-1">
+            <button
+              type="button"
+              onClick={() => setRenderLimit((prev) => prev + RENDER_PAGE_SIZE)}
+              className="inline-flex items-center gap-1 rounded-full border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-300 shadow-sm hover:bg-indigo-50"
+            >
+              <ChevronUp className="w-3.5 h-3.5" /> Load Older Messages (+
+              {Math.min(RENDER_PAGE_SIZE, filteredAllMessages.length - visibleMessages.length)})
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex h-full items-center justify-center text-xs text-slate-500 gap-2">
             <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
@@ -1410,14 +1936,18 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           <div className="flex h-full flex-col items-center justify-center text-center p-6 text-xs text-slate-500">
             <Sparkles className="w-8 h-8 text-indigo-400 mb-2" />
             <p className="font-bold text-slate-700 dark:text-slate-300">
-              {searchQuery
+              {showSavedOnly
+                ? 'आपके Revision Vault में अभी कोई बुकमार्क नहीं है'
+                : searchQuery
                 ? `"${searchQuery}" से जुड़ा कोई मैसेज नहीं मिला`
                 : showPinnedOnly
                 ? 'अभी कोई Pinned मैसेज नहीं है'
                 : 'इस सेक्शन में अभी कोई मैसेज नहीं है'}
             </p>
             <p className="mt-1">
-              पहला डाउट, पोल या फ़ोटो भेजें और <span className="font-bold text-indigo-500">@dinu</span> से मदद लें!
+              {showSavedOnly
+                ? 'किसी भी ज़रूरी ट्रिक या AI सॉल्यूशन के नीचे Save दबाकर यहाँ सेव करें!'
+                : 'पहला डाउट, ⚡ PYQ या फ़ोटो भेजें और @dinu से मदद लें!'}
             </p>
           </div>
         ) : (
@@ -1431,6 +1961,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             const solverScore = helpfulLeaderboard.get(msg.student_id) || 0;
             const helpfulList = Array.isArray(msg.helpful_by) ? msg.helpful_by : [];
             const iUpvoted = currentStudent ? helpfulList.includes(String(currentStudent.id)) : false;
+            const isBookmarked = !!bookmarkedIds[msg.id];
 
             const poll = msg.poll_data;
             const pollVotesObj = poll?.votes || {};
@@ -1532,6 +2063,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                       <img
                         src={msg.image_data}
                         alt="Doubt attachment"
+                        loading="lazy"
                         className="max-h-56 w-auto object-contain"
                       />
                     </button>
@@ -1541,7 +2073,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                     <div className="min-w-[230px] space-y-2">
                       <div className="font-extrabold text-[12px] flex items-center gap-1.5">
                         <BarChart2 className="w-4 h-4 shrink-0 text-amber-400" />
-                        <span>{poll.question}</span>
+                        <span>{formatScientificText(poll.question)}</span>
                       </div>
                       <div className="space-y-1.5">
                         {poll.options.map((opt, idx) => {
@@ -1585,7 +2117,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                                   <span className="opacity-70">
                                     {String.fromCharCode(65 + idx)}.
                                   </span>{' '}
-                                  {opt}
+                                  {formatScientificText(opt)}
                                   {isCorrect && (
                                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 inline" />
                                   )}
@@ -1603,7 +2135,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                       </div>
                     </div>
                   ) : (
-                    <div>{msg.message}</div>
+                    <div>{formatScientificText(msg.message)}</div>
                   )}
                 </div>
 
@@ -1615,6 +2147,16 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                     className="inline-flex items-center gap-0.5 hover:text-indigo-500"
                   >
                     <Reply className="w-3 h-3" /> Reply
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => toggleBookmark(msg.id)}
+                    className={`inline-flex items-center gap-0.5 ${
+                      isBookmarked ? 'text-emerald-500 font-bold' : 'hover:text-emerald-500'
+                    }`}
+                  >
+                    <Bookmark className="w-3 h-3" /> {isBookmarked ? 'Saved' : 'Save'}
                   </button>
 
                   {!isMine && !msg.is_ai && (
@@ -1798,22 +2340,32 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           className="flex flex-col gap-1.5 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5"
         >
           {selectedSubject === 'All' && (
-            <div className="flex items-center gap-1 px-1 text-[10px] text-slate-500">
-              <span>Subject:</span>
-              {(['General', 'Physics', 'Chemistry', 'Biology'] as const).map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setPostSubject(s)}
-                  className={`rounded-md px-2 py-0.5 font-bold ${
-                    postSubject === s
-                      ? 'bg-indigo-600 text-white'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                  }`}
-                >
-                  {s}
-                </button>
-              ))}
+            <div className="flex items-center justify-between gap-1 px-1 text-[10px] text-slate-500">
+              <div className="flex items-center gap-1">
+                <span>Subject:</span>
+                {(['General', 'Physics', 'Chemistry', 'Biology'] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setPostSubject(s)}
+                    className={`rounded-md px-2 py-0.5 font-bold ${
+                      postSubject === s
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={handleDropRandomPyq}
+                className="inline-flex items-center gap-0.5 rounded-md bg-purple-500/15 px-2 py-0.5 font-extrabold text-purple-600 dark:text-purple-300 hover:bg-purple-500/25"
+                title="1-Click NEET PYQ Quiz ड्रॉप करें"
+              >
+                <Zap className="w-3 h-3" /> Drop PYQ
+              </button>
             </div>
           )}
 
@@ -1840,7 +2392,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                 setShowPollModal(true);
               }}
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-emerald-500/15 hover:text-emerald-600"
-              title="NEET MCQ Poll बनाएं"
+              title="Custom NEET Poll बनाएं"
             >
               <BarChart2 className="w-4 h-4" />
             </button>
@@ -1858,7 +2410,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
               onChange={(e) => handleInputChange(e.target.value)}
               placeholder={
                 currentStudent
-                  ? 'डाउट लिखें, @ से टैग करें, या फ़ोटो/पोल भेजें...'
+                  ? 'डाउट लिखें, @ से टैग करें, या फ़ोटो/PYQ भेजें...'
                   : 'चैट करने के लिए पहले Student Login करें...'
               }
               className="flex-1 min-w-0 rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
@@ -1912,7 +2464,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                         ? 'bg-emerald-500 border-emerald-400 text-slate-950'
                         : 'bg-slate-800 border-slate-700 text-slate-300'
                     }`}
-                    title="सही उत्तर चिह्नित करें (वैकल्पिक)"
+                    title="सही उत्तर चिह्नित करें"
                   >
                     {String.fromCharCode(65 + idx)}
                   </button>
@@ -2105,3 +2657,9 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     </div>
   );
 };
+
+export const CommunityChatView: React.FC<CommunityChatViewProps> = (props) => (
+  <SafeCommunityBoundary>
+    <CommunityChatInner {...props} />
+  </SafeCommunityBoundary>
+);
