@@ -217,6 +217,26 @@ export default function App() {
   const batchGeneratedIdsRef = useRef<string[]>([]);
   const batchCoveredRef = useRef<string[]>([]);
   const batchStemsRef = useRef<Set<string>>(new Set());
+  const [showSecretHub, setShowSecretHub] = useState(false);
+const [globalStreak, setGlobalStreak] = useState<number>(() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dinu_neet2027_streak_v1') || '{"count":1}');
+    return Math.max(1, Number(raw.count) || 1);
+  } catch {
+    return 1;
+  }
+});
+
+  const [showSecretHub, setShowSecretHub] = useState(false);
+const [globalStreak, setGlobalStreak] = useState<number>(() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dinu_neet2027_streak_v1') || '{"count":1}');
+    return Math.max(1, Number(raw.count) || 1);
+  } catch {
+    return 1;
+  }
+});
+
 
   const showToast = useCallback((message: string, tone: 'success' | 'error' | 'info' = 'info') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -1059,6 +1079,8 @@ void studentFeatures.recordQuizInLeaderboard(summary);
   }, [role]);
 
   return (
+    <GlobalSafeErrorBoundary>
+
     <div className="min-h-screen obsidian-backdrop bg-[#F4F6FA] dark:bg-[#0B0E14] text-[#0F172A] dark:text-[#F1F5F9] transition-colors duration-150 flex flex-col">
       {/* Persistent Top Header Bar */}
       <TopBar
@@ -1080,6 +1102,31 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         }
         onAdjustFont={handleAdjustFont}
       />
+{route !== 'home' && (
+  <div className="mx-auto flex w-full max-w-3xl items-center justify-between px-3 pt-2.5 sm:px-4">
+    <button
+      type="button"
+      onClick={() => setRoute('home')}
+      className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-700 shadow-sm transition hover:bg-indigo-600 hover:text-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+    >
+      <ArrowLeft className="w-3.5 h-3.5" /> Home
+    </button>
+
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => setShowSecretHub(true)}
+        className="inline-flex items-center gap-1 rounded-xl border border-amber-400/40 bg-slate-900 px-2.5 py-1.5 text-[11px] font-extrabold text-amber-300 shadow-sm transition hover:bg-slate-800"
+        title="Secret Vault (PIN Required)"
+      >
+        <span>🔐 Secret Hub</span>
+      </button>
+      <span className="inline-flex items-center gap-1 rounded-full border border-orange-500/30 bg-orange-500/15 px-2.5 py-1 text-xs font-extrabold text-orange-600 dark:text-orange-300">
+        <Flame className="w-3.5 h-3.5 text-orange-500" /> {globalStreak}d
+      </span>
+    </div>
+  </div>
+)}
 
       {/* Main Centered Compact Container */}
       <main className="flex-1 w-full mx-auto max-w-3xl px-3 sm:px-4 pt-3.5">
@@ -1477,6 +1524,25 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         <StudentOnboardingModal onComplete={studentFeatures.saveStudentProfile} />
       )}
 <FloatingAiAssistant settings={settings} />
+<button
+  type="button"
+  onClick={() => setShowSecretHub(true)}
+  className="fixed bottom-20 right-4 z-40 inline-flex items-center gap-1.5 rounded-full border border-amber-400/40 bg-slate-900/95 px-3 py-2 text-[11px] font-extrabold text-amber-300 shadow-xl backdrop-blur-md transition hover:scale-105"
+  title="Secret Chat & Voice Notes (PIN Required)"
+>
+  <span>🔐 Secret Chat</span>
+  <span className="text-orange-300">• 🔥 {globalStreak}d</span>
+</button>
+
+<SecretDirectChatModal
+  isOpen={showSecretHub}
+  onClose={() => setShowSecretHub(false)}
+  currentStudent={studentFeatures.studentProfile}
+  settings={settings}
+  onRequireLogin={() =>
+    showToast('Secret Hub खोलने के लिए पहले Student Profile सेव करें।', 'info')
+  }
+/>
 
       {/* Toast Notification Stack */}
       <div
@@ -1511,5 +1577,7 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         </AnimatePresence>
       </div>
     </div>
+      </GlobalSafeErrorBoundary>
+
   );
 }
