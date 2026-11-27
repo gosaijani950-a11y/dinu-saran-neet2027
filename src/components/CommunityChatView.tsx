@@ -30,7 +30,7 @@ import type { AppSettings, StudentProfile } from '../types';
 export interface PollData {
   question: string;
   options: string[];
-  votes: Record<string, number>; // student_id -> optionIndex (0..3)
+  votes: Record<string, number>;
   correctIndex?: number | null;
 }
 
@@ -91,7 +91,6 @@ const AUTO_DELETE_REPORT_THRESHOLD = 7;
 const LOCAL_DB_NAME = 'dinu_neet2027_community_db';
 const LOCAL_STORE_NAME = 'messages_vault';
 
-// Pre-send client-side abuse & spam filter
 const BANNED_PATTERNS: RegExp[] = [
   /\b(madarchod|behenchod|bhenchod|bhosdike|bhosdiwale|chutiya|chutiye|gandu|randi|harami|haramkhor|kamina|kamine|laude|lode|lawde|lund|chut|bsdk|mc|bc)\b/i,
   /\b(fuck|fucking|motherfucker|bitch|bastard|asshole|dickhead|slut|whore)\b/i,
@@ -248,19 +247,16 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   const [showAdminPinModal, setShowAdminPinModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
 
-  // Poll Builder Modal state
   const [showPollModal, setShowPollModal] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '', '', '']);
   const [pollCorrectIdx, setPollCorrectIdx] = useState<number | null>(null);
 
-  // Realtime Presence & Typing state
   const [onlineCount, setOnlineCount] = useState<number>(1);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const channelRef = useRef<any>(null);
   const lastTypingSentRef = useRef<number>(0);
 
-  // Mention Autocomplete state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
 
   const [blockTarget, setBlockTarget] = useState<{ studentId: string; studentName: string } | null>(
@@ -353,8 +349,8 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       (settings as any)?.adminPassword ||
       (settings as any)?.adminPin ||
       env.VITE_ADMIN_PASSWORD ||
-      'dinu2027';
-    if (adminPinInput.trim() === String(expectedPin).trim() || adminPinInput.trim() === '2027') {
+      '148090';
+    if (adminPinInput.trim() === String(expectedPin).trim() || adminPinInput.trim() === '148090') {
       setAdminUnlocked(true);
       try {
         localStorage.setItem('dinu_admin_unlocked', 'true');
@@ -365,7 +361,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       setAdminPinInput('');
       setErrorMsg(null);
     } else {
-      setErrorMsg('गलत Admin PIN! कृपया सही Admin Password डालें।');
+      setErrorMsg('गलत Admin PIN! कृपया सही Admin PIN डालें।');
     }
   };
 
@@ -515,7 +511,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     }
   }, [messages.length, aiThinking, searchQuery]);
 
-  // Broadcast typing state throttled
   const notifyTyping = (isTyping: boolean) => {
     if (!channelRef.current || !currentStudent) return;
     const now = Date.now();
@@ -530,7 +525,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       .catch(() => {});
   };
 
-  // Compute Top Doubt Solvers (students with >= 2 helpful upvotes across messages)
   const helpfulLeaderboard = useMemo(() => {
     const counts = new Map<string, number>();
     messages.forEach((m) => {
@@ -541,7 +535,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     return counts;
   }, [messages]);
 
-  // Unique participants for @mention autocomplete
   const mentionCandidates = useMemo(() => {
     const map = new Map<string, string>();
     map.set('dinu', 'DINU AI (Mentor)');
@@ -565,7 +558,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     setInput(val);
     notifyTyping(val.trim().length > 0);
 
-    // Detect @mention trigger at end of input
     const match = val.match(/(?:^|\s)@([a-zA-Z0-9_]*)$/);
     if (match) {
       setMentionQuery(match[1]);
@@ -576,7 +568,9 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
 
   const applyMention = (name: string) => {
     const tag = name === 'dinu' ? '@dinu ' : `@${name} `;
-    setInput((prev) => prev.replace(/(?:^|\s)@[a-zA-Z0-9_]*$/, (m) => (m.startsWith(' ') ? ` ${tag}` : tag)));
+    setInput((prev) =>
+      prev.replace(/(?:^|\s)@[a-zA-Z0-9_]*$/, (m) => (m.startsWith(' ') ? ` ${tag}` : tag))
+    );
     setMentionQuery(null);
   };
 
@@ -586,7 +580,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       return;
     }
     const myId = String(currentStudent.id);
-    if (msg.student_id === myId) return; // Can't upvote own message
+    if (msg.student_id === myId) return;
 
     const currentList = Array.isArray(msg.helpful_by) ? msg.helpful_by : [];
     const already = currentList.includes(myId);
@@ -1017,7 +1011,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
       return;
     }
 
-    // Pre-send abuse & spam guard (skipped only for Admin)
     if (!adminUnlocked && text) {
       const violation = containsAbuseOrSpam(text);
       if (violation) {
@@ -1439,7 +1432,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
             const helpfulList = Array.isArray(msg.helpful_by) ? msg.helpful_by : [];
             const iUpvoted = currentStudent ? helpfulList.includes(String(currentStudent.id)) : false;
 
-            // Poll stats calculation
             const poll = msg.poll_data;
             const pollVotesObj = poll?.votes || {};
             const totalVotes = Object.keys(pollVotesObj).length;
@@ -1545,7 +1537,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                     </button>
                   )}
 
-                  {/* Interactive NEET Poll Card */}
                   {poll ? (
                     <div className="min-w-[230px] space-y-2">
                       <div className="font-extrabold text-[12px] flex items-center gap-1.5">
@@ -1713,7 +1704,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           })
         )}
 
-        {/* Live Typing & AI Thinking Indicators */}
         {typingUsers.length > 0 && (
           <div className="mr-auto flex items-center gap-1.5 rounded-full bg-slate-200/80 dark:bg-slate-800 px-3 py-1 text-[10px] font-semibold text-slate-600 dark:text-slate-300">
             <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-bounce" />
@@ -1776,7 +1766,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
-      {/* @mention Autocomplete Popup */}
       {filteredMentions.length > 0 && (
         <div className="border-t border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 px-3 py-1.5 flex items-center gap-1.5 overflow-x-auto">
           <span className="text-[10px] text-slate-400 shrink-0">Tag:</span>
