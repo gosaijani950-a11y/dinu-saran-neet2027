@@ -7,6 +7,7 @@ import {
   FileText,
   Film,
   Flame,
+  Loader2,
   Play,
   Sparkles,
   Target,
@@ -30,6 +31,106 @@ interface MediaItem {
   sizeMB: string;
   summary: string;
 }
+
+const CLEAN_EXAM_QUESTIONS: Record<string, Array<{
+  chapter: string;
+  qHi: string;
+  qEn: string;
+  optsHi: [string, string, string, string];
+  optsEn: [string, string, string, string];
+  correct: number;
+  expHi: string;
+  expEn: string;
+}>> = {
+  Botany: [
+    {
+      chapter: 'Biological Classification',
+      qHi: 'निम्नलिखित कथनों को पढ़िए:\nकथन I: माइकोप्लाज्मा में कोशिका भित्ति का पूर्णतः अभाव होता है और ये बिना ऑक्सीजन के जीवित रह सकते हैं।\nकथन II: डायटम की कोशिका भित्ति सिलिका युक्त होने के कारण अनश्वरी (Indestructible) होती है।',
+      qEn: 'Read the following statements:\nStatement I: Mycoplasma completely lack a cell wall and can survive without oxygen.\nStatement II: The cell walls of diatoms are embedded with silica and thus are indestructible.',
+      optsHi: [
+        'कथन I और कथन II दोनों सही हैं',
+        'कथन I सही है, परंतु कथन II गलत है',
+        'कथन I गलत है, परंतु कथन II सही है',
+        'कथन I और कथन II दोनों गलत हैं',
+      ],
+      optsEn: [
+        'Both Statement I and Statement II are correct',
+        'Statement I is correct but Statement II is incorrect',
+        'Statement I is incorrect but Statement II is correct',
+        'Both Statement I and Statement II are incorrect',
+      ],
+      correct: 0,
+      expHi: 'NCERT कक्षा 11 (जीव जगत का वर्गीकरण): माइकोप्लाज्मा सबसे छोटी जीवित कोशिकाएँ हैं जिनमें कोशिका भित्ति नहीं होती, और डायटम की भित्ति में सिलिका होने से डायटमी मृदा बनती है।',
+      expEn: 'NCERT Class 11 (Biological Classification): Both statements are directly from NCERT text.',
+    },
+    {
+      chapter: 'Cell Cycle and Cell Division',
+      qHi: 'अर्धसूत्री विभाजन-I की किस अवस्था में कियाज्मेटा (Chiasmata) का उपांतीभवन (Terminalisation) संपन्न होता है?',
+      qEn: 'Terminalisation of chiasmata takes place during which stage of Meiosis-I?',
+      optsHi: ['जाइगोटीन', 'पैकीटीन', 'डिप्लोटीन', 'डायाकाइनेसिस'],
+      optsEn: ['Zygotene', 'Pachytene', 'Diplotene', 'Diakinesis'],
+      correct: 3,
+      expHi: 'डायाकाइनेसिस (Diakinesis) पूर्वावस्था-I की अंतिम अवस्था है, जिसमें कियाज्मेटा का उपांतीभवन होता है और गुणसूत्र पूर्णतः संघनित हो जाते हैं।',
+      expEn: 'Diakinesis is marked by terminalisation of chiasmata and full condensation of chromosomes.',
+    },
+  ],
+  Zoology: [
+    {
+      chapter: 'Human Reproduction',
+      qHi: 'अभिकथन (A): अपरा (Placenta) एक अंतःस्रावी ऊतक के रूप में भी कार्य करता है।\nकारण (R): यह hCG, hPL, एस्ट्रोजन तथा प्रोजेस्टोजन जैसे हार्मोन स्रावित करता है।',
+      qEn: 'Assertion (A): Placenta also acts as an endocrine tissue.\nReason (R): It produces hormones like hCG, hPL, estrogens and progestogens.',
+      optsHi: [
+        'A और R दोनों सत्य हैं तथा R, A की सही व्याख्या करता है',
+        'A और R दोनों सत्य हैं, परंतु R, A की सही व्याख्या नहीं करता है',
+        'A सत्य है, परंतु R असत्य है',
+        'A असत्य है, परंतु R सत्य है',
+      ],
+      optsEn: [
+        'Both A and R are true and R is the correct explanation of A',
+        'Both A and R are true but R is not the correct explanation of A',
+        'A is true but R is false',
+        'A is false but R is true',
+      ],
+      correct: 0,
+      expHi: 'NCERT मानव जनन: अपरा भ्रूण को पोषण देने के साथ-साथ hCG, hPL, एस्ट्रोजन और प्रोजेस्टोजन स्रावित करके अंतःस्रावी कार्य भी करता है।',
+      expEn: 'NCERT Human Reproduction: Placenta secretes hCG, hPL, estrogens, and progestogens.',
+    },
+  ],
+  Physics: [
+    {
+      chapter: 'Ray Optics',
+      qHi: 'यदि काँच ($\\mu = 1.5$) के एक उभयोत्तल लेंस (Equiconvex Lens) की वायु में फोकस दूरी $20\\text{ cm}$ है, तो इसे जल ($\\mu = 1.33$) में डुबोने पर इसकी फोकस दूरी क्या होगी?',
+      qEn: 'If an equiconvex lens of glass ($\\mu = 1.5$) has a focal length of $20\\text{ cm}$ in air, what happens to its focal length when immersed in water ($\\mu = 1.33$)?',
+      optsHi: ['लगभग $78\\text{ cm}$ हो जाएगी (बढ़ जाएगी)', '$5\\text{ cm}$ हो जाएगी (घट जाएगी)', '$20\\text{ cm}$ ही रहेगी', 'अवतल लेंस की भाँति कार्य करेगा'],
+      optsEn: ['Increases to approx $78\\text{ cm}$', 'Decreases to $5\\text{ cm}$', 'Remains $20\\text{ cm}$', 'Behaves as a diverging lens'],
+      correct: 0,
+      expHi: 'लेंस मेकर सूत्र से $\\frac{f_w}{f_a} = \\frac{\\mu_g - 1}{(\\mu_g / \\mu_w) - 1} = \\frac{0.5}{(1.5/1.33)-1} \\approx 3.9$, अतः $f_w \\approx 78\\text{ cm}$।',
+      expEn: 'Using Lens Maker’s formula, $f_w \\approx 3.9 \\times 20 = 78\\text{ cm}$.',
+    },
+  ],
+  Chemistry: [
+    {
+      chapter: 'Coordination Compounds',
+      qHi: '$[\\text{Ni(CN)}_4]^{2-}$ संकुल आयन की ज्यामिति और चुंबकीय प्रकृति क्या होती है?',
+      qEn: 'What are the geometry and magnetic nature of the complex ion $[\\text{Ni(CN)}_4]^{2-}$?',
+      optsHi: [
+        'वर्ग समतलीय (Square Planar) तथा प्रतिचुंबकीय (Diamagnetic)',
+        'चतुष्फलकीय (Tetrahedral) तथा अनुचुंबकीय (Paramagnetic)',
+        'वर्ग समतलीय तथा अनुचुंबकीय',
+        'चतुष्फलकीय तथा प्रतिचुंबकीय',
+      ],
+      optsEn: [
+        'Square planar and diamagnetic',
+        'Tetrahedral and paramagnetic',
+        'Square planar and paramagnetic',
+        'Tetrahedral and diamagnetic',
+      ],
+      correct: 0,
+      expHi: 'प्रबल क्षेत्र लिगैंड $\\text{CN}^-$ की उपस्थिति में $\\text{Ni}^{2+}$ ($3d^8$) के अयुग्मित इलेक्ट्रॉनों का युग्मन हो जाता है, जिससे $dsp^2$ संकरण, वर्ग समतलीय ज्यामिति और प्रतिचुंबकीय प्रकृति प्राप्त होती है।',
+      expEn: 'Strong field ligand $\\text{CN}^-$ pairs up electrons in $\\text{Ni}^{2+}$ ($3d^8$), giving $dsp^2$ hybridisation, square planar shape, and diamagnetism.',
+    },
+  ],
+};
 
 function makeSafeMcq(raw: any, idx: number): MCQQuestion {
   const optsHi = Array.isArray(raw?.options_hi) && raw.options_hi.length === 4
@@ -63,10 +164,25 @@ function makeSafeMcq(raw: any, idx: number): MCQQuestion {
     correct_index: corr,
     explanation_hi: String(raw?.explanation_hi || 'सही विकल्प का चयन करें।'),
     explanation_en: String(raw?.explanation_en || 'Select the right option.'),
-    tags: Array.isArray(raw?.tags) ? raw.tags.map(String) : ['Ultra Drill'],
+    tags: Array.isArray(raw?.tags) ? raw.tags.map(String) : ['NTA Pattern'],
     isStarred: Boolean(raw?.isStarred),
     isSaved: Boolean(raw?.isSaved),
   };
+}
+
+function readGeminiKey(): string {
+  try {
+    const direct = localStorage.getItem('gemini_api_key') || localStorage.getItem('neet_gemini_api_key');
+    if (direct && direct.trim().length > 10) return direct.trim();
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k) continue;
+      const val = localStorage.getItem(k) || '';
+      const m = val.match(/AIzaSy[0-9A-Za-z_-]{30,}/);
+      if (m) return m[0];
+    }
+  } catch {}
+  return '';
 }
 
 export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
@@ -79,6 +195,7 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
   const [activeTool, setActiveTool] = useState<'media_drill' | 'ncert_traps' | 'sm2_recall' | 'omr_sim'>('media_drill');
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [generatedDrill, setGeneratedDrill] = useState<MCQQuestion[]>([]);
+  const [isBuilding, setIsBuilding] = useState<boolean>(false);
   const [selectedSubject, setSelectedSubject] = useState<'Physics' | 'Chemistry' | 'Botany' | 'Zoology'>('Botany');
   const [omrAnswers, setOmrAnswers] = useState<Record<number, number>>({});
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -105,8 +222,8 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
         let snippet = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
         if (!isVid && /\.(txt|md|csv)$/i.test(file.name)) {
           try {
-            const raw = await file.slice(0, 20000).text();
-            snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 180) || snippet;
+            const raw = await file.slice(0, 30000).text();
+            snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 400) || snippet;
           } catch {}
         }
         added.push({
@@ -126,48 +243,81 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
     }
   };
 
-  const handleBuildFromMedia = () => {
+  const handleBuildFromMedia = async () => {
+    if (isBuilding) return;
+    setIsBuilding(true);
     try {
-      const topics =
-        mediaItems.length > 0
-          ? mediaItems.map((m) => `${m.type === 'video' ? 'Video' : 'Doc'}: ${m.summary}`)
-          : [`${selectedSubject} NCERT High-Yield Rapid Drill`];
+      const apiKey = readGeminiKey();
+      const contextText = mediaItems.map((m) => `${m.name}: ${m.summary}`).join('\n');
 
-      const built: MCQQuestion[] = Array.from({ length: 10 }).map((_, idx) => {
-        const topic = topics[idx % topics.length];
+      if (apiKey) {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    {
+                      text: `Generate 10 clean, real NTA NEET exam MCQs in Hindi (with English) for ${selectedSubject}. ${
+                        contextText ? `Based on: ${contextText}` : 'Strict NCERT High-Yield.'
+                      } Return ONLY JSON array: [{"chapter":"...","question_hi":"...","question_en":"...","options_hi":["A","B","C","D"],"options_en":["A","B","C","D"],"correct_index":0,"explanation_hi":"...","explanation_en":"..."}]`,
+                    },
+                  ],
+                },
+              ],
+              generationConfig: { temperature: 0.4, responseMimeType: 'application/json' },
+            }),
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const txt = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '')
+            .replace(/```json|```/g, '')
+            .trim();
+          const parsed = JSON.parse(txt);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const cleanAi = parsed.slice(0, 10).map((item, i) =>
+              makeSafeMcq({ ...item, subject: selectedSubject, tags: ['Media/Doc AI'] }, i)
+            );
+            setGeneratedDrill(cleanAi);
+            onToast?.(`✨ Gemini AI से ${cleanAi.length} असली NEET प्रश्न तैयार!`, 'success');
+            setIsBuilding(false);
+            return;
+          }
+        }
+      }
+
+      const pool = CLEAN_EXAM_QUESTIONS[selectedSubject] || CLEAN_EXAM_QUESTIONS.Botany;
+      const built: MCQQuestion[] = Array.from({ length: Math.min(10, pool.length * 3) }).map((_, idx) => {
+        const item = pool[idx % pool.length];
         return makeSafeMcq(
           {
-            id: `media_drill_${Date.now()}_${idx}`,
+            id: `clean_exam_${Date.now()}_${idx}`,
             subject: selectedSubject,
-            chapter: topic.slice(0, 48),
-            difficulty: idx % 3 === 0 ? 'Hard' : 'Medium',
-            question_hi: `(Media/Doc Drill #${idx + 1}) [${topic}] के संदर्भ में ${selectedSubject} का कौन-सा नियम या तथ्य NCERT के अनुसार सही है?`,
-            question_en: `(Media/Doc Drill #${idx + 1}) Regarding [${topic}], which ${selectedSubject} rule or fact is accurate per NCERT?`,
-            options_hi: [
-              `${topic} का मानक NCERT सिद्धांत और उसका प्रत्यक्ष अनुप्रयोग`,
-              'यह केवल अमान्य परिस्थितियों में बिना नियंत्रण के कार्य करता है',
-              'इसमें किसी भी कारक की कोई भूमिका नहीं होती',
-              'उपरोक्त सभी कथन गलत हैं',
-            ],
-            options_en: [
-              `Standard NCERT principle of ${topic} and its direct application`,
-              'It operates without control only under invalid conditions',
-              'No factor plays any role here',
-              'All of the above statements are incorrect',
-            ],
-            correct_index: 0,
-            explanation_hi: `अपलोड की गई सामग्री "${topic}" और NCERT ${selectedSubject} के अनुसार विकल्प A पूर्णतः सत्य है।`,
-            explanation_en: `Based on uploaded content "${topic}" and NCERT ${selectedSubject}, option A is correct.`,
-            tags: ['Media/Doc Drill'],
+            chapter: item.chapter,
+            difficulty: idx % 2 === 0 ? 'Hard' : 'Medium',
+            question_hi: item.qHi,
+            question_en: item.qEn,
+            options_hi: item.optsHi,
+            options_en: item.optsEn,
+            correct_index: item.correct,
+            explanation_hi: item.expHi,
+            explanation_en: item.expEn,
+            tags: ['NTA Pattern'],
           },
           idx
         );
       });
 
       setGeneratedDrill(built);
-      onToast?.(`✅ अपलोड सामग्री से ${built.length} प्रश्न तैयार हो गए!`, 'success');
+      onToast?.(`✅ ${built.length} साफ़-सुथरे NTA NEET प्रश्न तैयार हो गए!`, 'success');
     } catch {
       onToast?.('प्रश्न बनाने में समस्या आई।', 'error');
+    } finally {
+      setIsBuilding(false);
     }
   };
 
@@ -261,16 +411,18 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleBuildFromMedia}
-                className="h-8 px-3.5 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold cursor-pointer"
+                disabled={isBuilding}
+                onClick={() => void handleBuildFromMedia()}
+                className="h-8 px-3.5 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
-                Generate 10 MCQs
+                {isBuilding && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Generate NEET MCQs</span>
               </button>
               {generatedDrill.length > 0 && (
                 <button
                   type="button"
                   onClick={() =>
-                    handleSafeLaunch(generatedDrill, `${selectedSubject} Media/Doc Drill`)
+                    handleSafeLaunch(generatedDrill, `${selectedSubject} NEET Practice`)
                   }
                   className="h-8 px-3.5 rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
                 >
@@ -325,7 +477,7 @@ export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
             onClick={() => {
               const pool = safeBank.length > 0 ? safeBank.slice(0, 15) : generatedDrill;
               if (pool.length === 0) {
-                handleBuildFromMedia();
+                void handleBuildFromMedia();
                 return;
               }
               handleSafeLaunch(pool, 'NCERT Trap Hunter Drill');
