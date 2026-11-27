@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Clock, ShieldCheck, BrainCircuit, CheckCircle2, XCircle,
-  Play, Sparkles, CircleDot, Award
+  Play, CircleDot, Award, Wind, Focus
 } from 'lucide-react';
 import type { MCQQuestion, MistakeRecord } from '../types';
 
@@ -14,7 +14,25 @@ interface Sm2Entry {
   nextDueTs: number;
 }
 
-/* ==================== 1. NEET 2027 COUNTDOWN & STREAK FREEZE ==================== */
+const PANIC_RESET_MCQS = [
+  {
+    q: 'मानव हृदय में कुल कितने कक्ष (Chambers) होते हैं?',
+    opts: ['2', '3', '4', '6'],
+    ans: 2,
+  },
+  {
+    q: 'DNA की संरचना में एडीनिन किसके साथ जुड़ता है?',
+    opts: ['ग्वानीन', 'थायमिन', 'साइटोसिन', 'यूरेसिल'],
+    ans: 1,
+  },
+  {
+    q: 'SI इकाई में विद्युत धारा (Electric Current) का मात्रक क्या है?',
+    opts: ['वोल्ट', 'ओम', 'एम्पियर', 'कूलॉम'],
+    ans: 2,
+  },
+];
+
+/* ==================== 1. NEET 2027 COUNTDOWN, FOCUS LOCK & STREAK FREEZE ==================== */
 export const NeetCountdownAndFreezeBar: React.FC<{
   streak: number;
   onToast?: (msg: string, tone?: 'success' | 'error' | 'info') => void;
@@ -24,9 +42,17 @@ export const NeetCountdownAndFreezeBar: React.FC<{
   const [freezeAvailable, setFreezeAvailable] = useState(true);
   const [freezeActiveToday, setFreezeActiveToday] = useState(false);
 
+  // Silent Study Lock (25m Focus Timer)
+  const [focusSecLeft, setFocusSecLeft] = useState(0);
+
+  // Exam-Pressure Panic Reset Modal
+  const [panicOpen, setPanicOpen] = useState(false);
+  const [breathSec, setBreathSec] = useState(60);
+  const [panicScore, setPanicScore] = useState<number | null>(null);
+  const [panicPicked, setPanicPicked] = useState<Record<number, number>>({});
+
   useEffect(() => {
     const calc = () => {
-      // Target: First Sunday of May 2027 (May 2, 2027, 2:00 PM IST)
       const target = new Date('2027-05-02T14:00:00+05:30').getTime();
       const diff = Math.max(0, target - Date.now());
       setDaysLeft(Math.floor(diff / (1000 * 60 * 60 * 24)));
@@ -47,6 +73,31 @@ export const NeetCountdownAndFreezeBar: React.FC<{
     } catch {}
   }, []);
 
+  useEffect(() => {
+    if (focusSecLeft <= 0) return;
+    const t = window.setInterval(() => {
+      setFocusSecLeft((s) => {
+        if (s <= 1) {
+          onToast?.('🎯 25-मिनट Silent Study Lock पूरा हुआ! शानदार फोकस।', 'success');
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [focusSecLeft, onToast]);
+
+  useEffect(() => {
+    if (!panicOpen) return;
+    setBreathSec(60);
+    setPanicScore(null);
+    setPanicPicked({});
+    const t = window.setInterval(() => {
+      setBreathSec((b) => (b > 0 ? b - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [panicOpen]);
+
   const activateFreeze = () => {
     if (!freezeAvailable) return;
     const monthTag = new Date().toISOString().slice(0, 7);
@@ -62,42 +113,124 @@ export const NeetCountdownAndFreezeBar: React.FC<{
     onToast?.('🛡️ Streak Freeze Shield सक्रिय! आज आपकी स्ट्रीक सुरक्षित रहेगी।', 'success');
   };
 
+  const finishPanicDrill = () => {
+    let sc = 0;
+    PANIC_RESET_MCQS.forEach((item, i) => {
+      if (panicPicked[i] === item.ans) sc += 4;
+    });
+    setPanicScore(sc);
+  };
+
+  const mins = Math.floor(focusSecLeft / 60);
+  const secs = focusSecLeft % 60;
+
   return (
-    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-indigo-500/25 bg-gradient-to-r from-indigo-950/90 via-slate-900 to-amber-950/40 px-3.5 py-2.5 text-white shadow-md">
-      <div className="flex items-center gap-2.5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/20 text-amber-300">
-          <Clock className="w-4 h-4" />
+    <div className="mb-3 space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-indigo-500/25 bg-gradient-to-r from-indigo-950/90 via-slate-900 to-amber-950/40 px-3.5 py-2.5 text-white shadow-md">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/20 text-amber-300">
+            <Clock className="w-4 h-4" />
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
+              NTA NEET UG 2027 Countdown
+            </p>
+            <p className="text-xs sm:text-sm font-extrabold">
+              {daysLeft} Days, {hoursLeft} Hrs Left •{' '}
+              <span className="text-orange-400">{streak}d Streak 🔥</span>
+            </p>
+          </div>
         </div>
-        <div>
-          <p className="text-[10px] font-bold uppercase tracking-wider text-amber-300">
-            NTA NEET UG 2027 Countdown
-          </p>
-          <p className="text-xs sm:text-sm font-extrabold">
-            {daysLeft} Days, {hoursLeft} Hrs Left •{' '}
-            <span className="text-orange-400">{streak}d Streak 🔥</span>
-          </p>
+
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setFocusSecLeft((f) => (f > 0 ? 0 : 25 * 60))}
+            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold transition ${
+              focusSecLeft > 0
+                ? 'bg-emerald-600 text-white'
+                : 'bg-slate-800 text-emerald-300 hover:bg-slate-700'
+            }`}
+          >
+            <Focus className="w-3.5 h-3.5" />
+            {focusSecLeft > 0 ? `Focus ${mins}:${String(secs).padStart(2, '0')}` : '25m Focus Lock'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setPanicOpen(true)}
+            className="inline-flex items-center gap-1 rounded-xl bg-rose-500/20 border border-rose-400/30 px-2.5 py-1.5 text-[11px] font-extrabold text-rose-200 hover:bg-rose-500/30"
+          >
+            <Wind className="w-3.5 h-3.5" /> Panic Reset
+          </button>
+
+          <button
+            type="button"
+            disabled={!freezeAvailable}
+            onClick={activateFreeze}
+            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-[11px] font-extrabold transition ${
+              freezeActiveToday
+                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40'
+                : freezeAvailable
+                ? 'bg-indigo-600 text-white hover:bg-indigo-500'
+                : 'bg-slate-800 text-slate-400 cursor-not-allowed'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            {freezeActiveToday ? 'Freeze Active' : freezeAvailable ? 'Freeze (1/1)' : 'Used (0/1)'}
+          </button>
         </div>
       </div>
 
-      <button
-        type="button"
-        disabled={!freezeAvailable}
-        onClick={activateFreeze}
-        className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[11px] font-extrabold transition ${
-          freezeActiveToday
-            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/40'
-            : freezeAvailable
-            ? 'bg-indigo-600 text-white hover:bg-indigo-500'
-            : 'bg-slate-800 text-slate-400 cursor-not-allowed'
-        }`}
-      >
-        <ShieldCheck className="w-3.5 h-3.5" />
-        {freezeActiveToday
-          ? 'Freeze Shield Active Today'
-          : freezeAvailable
-          ? 'Use Monthly Freeze (1/1)'
-          : 'Monthly Freeze Used (0/1)'}
-      </button>
+      {/* Exam-Pressure Panic Reset Drawer */}
+      {panicOpen && (
+        <div className="rounded-2xl border border-rose-500/35 bg-slate-950 p-3.5 text-white shadow-xl space-y-2.5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-extrabold text-rose-300">
+              🧘 Calm Mind Reset • Breath Timer: {breathSec}s
+            </span>
+            <button type="button" onClick={() => setPanicOpen(false)} className="text-[11px] font-bold text-slate-400 hover:text-white">
+              Close
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-300">
+            4 सेकंड सांस लें → 4 सेकंड रोकें → 4 सेकंड छोड़ें। नीचे 3 आसान सवाल हल करके कॉन्फिडेंस रिसेट करें:
+          </p>
+          {PANIC_RESET_MCQS.map((item, idx) => (
+            <div key={idx} className="rounded-xl bg-slate-900 p-2.5 text-xs">
+              <p className="font-bold">{idx + 1}. {item.q}</p>
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                {item.opts.map((o, oi) => (
+                  <button
+                    key={oi}
+                    type="button"
+                    onClick={() => setPanicPicked((p) => ({ ...p, [idx]: oi }))}
+                    className={`rounded-lg px-2 py-1 text-left text-[11px] font-bold ${
+                      panicPicked[idx] === oi ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-200'
+                    }`}
+                  >
+                    {o}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={finishPanicDrill}
+              className="rounded-xl bg-emerald-600 px-3.5 py-1.5 text-xs font-extrabold text-white"
+            >
+              Check Confidence Boost
+            </button>
+            {panicScore !== null && (
+              <span className="text-xs font-extrabold text-amber-300">
+                Score: +{panicScore}/12 • अब आप तैयार हैं! 💪
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -116,7 +249,6 @@ export const SmartRevisionAndOmrWidget: React.FC<{
     .filter((m) => !m.mastered && unifiedQuestionsMap[m.questionId])
     .map((m) => unifiedQuestionsMap[m.questionId]);
 
-  // SM-2 Due Questions (1 -> 3 -> 7 -> 21 days cycle)
   const dueQuestions = (() => {
     try {
       const sched: Record<string, Sm2Entry> = JSON.parse(localStorage.getItem(SM2_KEY) || '{}');
@@ -144,7 +276,6 @@ export const SmartRevisionAndOmrWidget: React.FC<{
     } catch {}
   };
 
-  // OMR Bubble Fill (Permanent Lock like real NTA OMR)
   const fillBubble = (qId: string, optIdx: number) => {
     if (omrSubmitted || omrAnswers[qId] !== undefined) return;
     setOmrAnswers((prev) => ({ ...prev, [qId]: optIdx }));
@@ -223,7 +354,6 @@ export const SmartRevisionAndOmrWidget: React.FC<{
         </div>
       </div>
 
-      {/* Interactive NTA OMR Bubble Sheet Simulator */}
       {omrOpen && (
         <div className="mt-3 space-y-2.5 border-t border-slate-200 pt-3 dark:border-slate-800">
           <p className="text-[11px] font-bold text-amber-600 dark:text-amber-300">
