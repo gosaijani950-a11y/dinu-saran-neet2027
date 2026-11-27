@@ -19,6 +19,7 @@ import {
   Star,
   Trash2,
   Trophy,
+  Users,
   Zap,
 } from 'lucide-react';
 import type { DatabaseStats } from '../db/database';
@@ -356,6 +357,31 @@ export const HomeHub: React.FC<HomeHubProps> = ({
             <ArrowRight className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
           </motion.button>
         </div>
+        {/* NEW ROW: Student Community Chat */}
+<motion.button
+  type="button"
+  whileHover={{ y: -1 }}
+  whileTap={{ scale: 0.98 }}
+  transition={{ duration: 0.16 }}
+  onClick={() => onNavigate('community')}
+  className="w-full text-left rounded-2xl p-3.5 bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10 dark:bg-[#141923] border border-indigo-500/35 shadow-xs hover:border-indigo-500/60 transition-colors cursor-pointer flex items-center justify-between gap-2"
+>
+  <div className="flex items-center gap-2.5 min-w-0">
+    <span className="w-8.5 h-8.5 rounded-xl bg-indigo-500/20 text-indigo-500 dark:text-indigo-400 flex items-center justify-center shrink-0">
+      <Users className="w-4 h-4" />
+    </span>
+    <div className="min-w-0">
+      <div className="text-[13px] font-bold text-[#0F172A] dark:text-[#F1F5F9] truncate">
+        NEET 2027 Student Community
+      </div>
+      <div className="text-[11px] text-[#64748B] dark:text-[#94A3B8] truncate">
+        Group Doubts · Tag @dinu for AI Reply
+      </div>
+    </div>
+  </div>
+  <ArrowRight className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+</motion.button>
+
 
         {/* ROW 2: 4 Compact 1x1 Study Tiles */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 sm:gap-3">
