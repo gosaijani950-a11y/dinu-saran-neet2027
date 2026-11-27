@@ -30,6 +30,8 @@ interface TopBarProps {
   onAdminLogout: () => void;
   onToggleTheme: () => void;
   onAdjustFont: (delta: number) => void;
+  onLogoTap?: () => void;
+
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -48,6 +50,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onAdminLogout,
   onToggleTheme,
   onAdjustFont,
+  onLogoTap,
+
 }) => {
   const isAdmin = role === 'admin';
   const hasApiKey = Boolean(settings.apiKey.trim());
@@ -76,7 +80,8 @@ export const TopBar: React.FC<TopBarProps> = ({
         <div className="flex items-center gap-1.5 min-w-0">
           <button
             type="button"
-            onClick={onNavigateHome}
+            onClick={() => (onLogoTap ? onLogoTap() : onNavigateHome())}
+
             aria-label="Go to Home Hub"
             className="flex items-center gap-2 text-left group min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-lg py-0.5 pr-1 cursor-pointer"
           >
