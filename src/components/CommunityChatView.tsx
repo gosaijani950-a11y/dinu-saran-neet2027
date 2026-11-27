@@ -14,6 +14,10 @@ import {
   ImagePlus,
   ShieldCheck,
   Database,
+  Flag,
+  Ban,
+  Unlock,
+  AlertTriangle,
 } from 'lucide-react';
 import type { AppSettings, StudentProfile } from '../types';
 
@@ -30,6 +34,27 @@ export interface CommunityMessage {
   is_pinned?: boolean;
   is_ai: boolean;
   message: string;
+  created_at: string;
+}
+
+export interface CommunityBlock {
+  student_id: string;
+  student_name: string;
+  blocked_until: string | null;
+  is_permanent: boolean;
+  reason?: string;
+  created_at?: string;
+}
+
+export interface CommunityReport {
+  id: string;
+  message_id: string;
+  reported_student_id: string;
+  reported_student_name: string;
+  message_preview?: string;
+  reporter_id: string;
+  reporter_name: string;
+  reason?: string;
   created_at: string;
 }
 
@@ -93,7 +118,7 @@ const upsertLocalMessages = async (msgs: CommunityMessage[]): Promise<void> => {
       tx.onerror = () => reject(tx.error);
     });
   } catch {
-    // Ignore quota error
+    // Ignore
   }
 };
 
@@ -167,6 +192,13 @@ const compressImageToBase64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
+const isBlockActive = (block?: CommunityBlock | null): boolean => {
+  if (!block) return false;
+  if (block.is_permanent) return true;
+  if (!block.blocked_until) return false;
+  return new Date(block.blocked_until).getTime() > Date.now();
+};
+
 export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   currentStudent,
   settings,
@@ -174,10 +206,19 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   isAdmin = false,
 }) => {
   const [messages, setMessages] = useState<CommunityMessage[]>([]);
+  const [blocks, setBlocks] = useState<CommunityBlock[]>([]);
+  const [reports, setReports] = useState<CommunityReport[]>([]);
   const [input, setInput] = useState('');
   const [selectedSubject, setSelectedSubject] = useState<SubjectTab>('All');
   const [postSubject, setPostSubject] = useState<Exclude<SubjectTab, 'All'>>('General');
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
+  const [showModPanel, setShowModPanel] = useState(false);
+  const [blockTarget, setBlockTarget] = useState<{ studentId: string; studentName: string } | null>(
+    null
+  );
+  const [reportTarget, setReportTarget] = useState<CommunityMessage | null>(null);
+  const [reportReason, setReportReason] = useState('Abusive / Gali-Galauj');
+  const [reportedIds, setReportedIds] = useState<Record<string, boolean>>({});
   const [replyingTo, setReplyingTo] = useState<CommunityMessage | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -186,9 +227,15 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   const [sending, setSending] = useState(false);
   const [aiThinking, setAiThinking] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState<number>(Date.now());
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowTick(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (isAdmin) {
@@ -214,6 +261,24 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     if (!url || !key) return null;
     return createClient(url, key);
   }, [settings.supabaseUrl, settings.supabaseAnonKey]);
+
+  const fetchModerationData = async () => {
+    if (!supabase) return;
+    try {
+      const [blocksRes, reportsRes] = await Promise.all([
+        supabase.from('community_blocks').select('*'),
+        supabase
+          .from('community_reports')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(50),
+      ]);
+      if (blocksRes.data) setBlocks(blocksRes.data as CommunityBlock[]);
+      if (reportsRes.data) setReports(reportsRes.data as CommunityReport[]);
+    } catch {
+      // Tables may not exist yet before SQL run
+    }
+  };
 
   const syncMessages = async () => {
     const localHistory = await readAllLocalMessages();
@@ -253,6 +318,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
 
       const merged = mergeMessageLists(localHistory, combinedServer);
       setMessages(merged);
+      await fetchModerationData();
     } catch (err: any) {
       setErrorMsg(err?.message || 'चैट सिंक करने में समस्या आई।');
     } finally {
@@ -265,7 +331,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     if (!supabase) return;
 
     const channel = supabase
-      .channel('public:community_messages_hybrid')
+      .channel('public:community_moderation_v3')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'community_messages' },
@@ -286,6 +352,20 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           setMessages((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
         }
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'community_blocks' },
+        () => {
+          fetchModerationData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'community_reports' },
+        () => {
+          fetchModerationData();
+        }
+      )
       .subscribe();
 
     return () => {
@@ -296,6 +376,108 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages.length, aiThinking]);
+
+  const myActiveBlock = useMemo(() => {
+    if (!currentStudent || adminUnlocked) return null;
+    const found = blocks.find((b) => b.student_id === String(currentStudent.id));
+    if (!found) return null;
+    if (found.is_permanent) return found;
+    if (found.blocked_until && new Date(found.blocked_until).getTime() > nowTick) return found;
+    return null;
+  }, [blocks, currentStudent, adminUnlocked, nowTick]);
+
+  const activeBlockMap = useMemo(() => {
+    const map = new Map<string, CommunityBlock>();
+    blocks.forEach((b) => {
+      if (b.is_permanent || (b.blocked_until && new Date(b.blocked_until).getTime() > nowTick)) {
+        map.set(b.student_id, b);
+      }
+    });
+    return map;
+  }, [blocks, nowTick]);
+
+  const handleApplyBlock = async (minutes: number | 'permanent') => {
+    if (!supabase || !adminUnlocked || !blockTarget) return;
+    const isPermanent = minutes === 'permanent';
+    const blockedUntil = isPermanent
+      ? null
+      : new Date(Date.now() + minutes * 60_000).toISOString();
+
+    const payload: CommunityBlock = {
+      student_id: blockTarget.studentId,
+      student_name: blockTarget.studentName,
+      blocked_until: blockedUntil,
+      is_permanent: isPermanent,
+      reason: isPermanent ? 'Permanent Block by Admin' : `Muted for ${minutes} mins by Admin`,
+    };
+
+    const { error } = await supabase
+      .from('community_blocks')
+      .upsert(payload, { onConflict: 'student_id' });
+
+    if (error) {
+      setErrorMsg('Block लागू नहीं हो पाया: ' + error.message);
+    } else {
+      setBlocks((prev) => [
+        ...prev.filter((b) => b.student_id !== blockTarget.studentId),
+        payload,
+      ]);
+      setBlockTarget(null);
+    }
+  };
+
+  const handleUnblock = async (studentId: string) => {
+    if (!supabase || !adminUnlocked) return;
+    const { error } = await supabase
+      .from('community_blocks')
+      .delete()
+      .eq('student_id', studentId);
+    if (error) {
+      setErrorMsg('Unblock नहीं हो पाया: ' + error.message);
+    } else {
+      setBlocks((prev) => prev.filter((b) => b.student_id !== studentId));
+    }
+  };
+
+  const handleSubmitReport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabase || !reportTarget) return;
+    if (!currentStudent) {
+      onRequireLogin();
+      return;
+    }
+
+    const reporterName =
+      currentStudent.full_name?.trim() ||
+      (currentStudent as any).name?.trim() ||
+      'NEET Student';
+
+    const { error } = await supabase.from('community_reports').insert([
+      {
+        message_id: reportTarget.id,
+        reported_student_id: reportTarget.student_id,
+        reported_student_name: reportTarget.student_name,
+        message_preview: (reportTarget.message || '📷 Photo').slice(0, 120),
+        reporter_id: String(currentStudent.id || 'student'),
+        reporter_name: reporterName,
+        reason: reportReason,
+      },
+    ]);
+
+    if (error) {
+      setErrorMsg('Report भेजने में समस्या आई: ' + error.message);
+    } else {
+      setReportedIds((prev) => ({ ...prev, [reportTarget.id]: true }));
+      setReportTarget(null);
+      fetchModerationData();
+    }
+  };
+
+  const handleClearReport = async (reportId: string) => {
+    if (!supabase || !adminUnlocked) return;
+    setReports((prev) => prev.filter((r) => r.id !== reportId));
+    await supabase.from('community_reports').delete().eq('id', reportId);
+  };
 
   const handleClearLocalVault = async () => {
     if (
@@ -450,7 +632,6 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         const aiMsg = aiInserted as CommunityMessage;
         await upsertLocalMessages([aiMsg]);
 
-        // Auto-delete from Supabase after 90s if longer than 120 words (stays permanently in Local Vault)
         const wordCount = replyText.trim().split(/\s+/).length;
         if (wordCount > AI_AUTO_DELETE_WORD_LIMIT) {
           setTimeout(() => {
@@ -476,6 +657,10 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     if ((!text && !attachedImage) || sending) return;
     if (!currentStudent) {
       onRequireLogin();
+      return;
+    }
+    if (myActiveBlock) {
+      setErrorMsg('आपको Admin द्वारा ब्लॉक किया गया है। आप अभी मैसेज नहीं भेज सकते।');
       return;
     }
     if (!supabase) {
@@ -574,6 +759,20 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
     }
   };
 
+  const formatRemainingTime = (block: CommunityBlock) => {
+    if (block.is_permanent) return 'Permanent Block';
+    if (!block.blocked_until) return '';
+    const diffMs = new Date(block.blocked_until).getTime() - nowTick;
+    if (diffMs <= 0) return 'Unblocked';
+    const mins = Math.ceil(diffMs / 60_000);
+    if (mins >= 60) {
+      const hrs = Math.floor(mins / 60);
+      const rem = mins % 60;
+      return `${hrs}h ${rem}m बाकी`;
+    }
+    return `${mins} मिनट बाकी`;
+  };
+
   return (
     <div className="mx-auto flex h-[calc(100vh-115px)] max-w-2xl flex-col rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-lg overflow-hidden">
       {/* Header */}
@@ -592,12 +791,23 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
               )}
             </div>
             <p className="text-[10px] text-indigo-100 flex items-center gap-1">
-              <Database className="w-3 h-3" /> Local Saved: {messages.length} msgs • AI के लिए{' '}
+              <Database className="w-3 h-3" /> Local: {messages.length} msgs • AI के लिए{' '}
               <span className="font-bold text-amber-300">@dinu</span>
             </p>
           </div>
         </div>
         <div className="flex items-center gap-1">
+          {adminUnlocked && (
+            <button
+              type="button"
+              onClick={() => setShowModPanel((p) => !p)}
+              className="relative rounded-xl bg-white/15 px-2.5 py-1.5 text-[10px] font-bold hover:bg-white/25 flex items-center gap-1"
+              title="Blocked Users & Student Reports"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-300" />
+              <span>Mod ({reports.length + activeBlockMap.size})</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={handleClearLocalVault}
@@ -616,6 +826,106 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Admin Moderation Drawer (Reports + Blocked List + Unblock) */}
+      {adminUnlocked && showModPanel && (
+        <div className="max-h-60 overflow-y-auto border-b border-amber-500/30 bg-slate-900 text-slate-100 p-3 text-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="font-extrabold text-amber-300 flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4" /> Admin Moderation Control
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowModPanel(false)}
+              className="rounded p-1 hover:bg-slate-800"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Blocked Users Section */}
+          <div>
+            <div className="text-[11px] font-bold text-rose-400 mb-1">
+              Blocked Students ({activeBlockMap.size})
+            </div>
+            {activeBlockMap.size === 0 ? (
+              <p className="text-[11px] text-slate-400">अभी कोई भी यूज़र ब्लॉक नहीं है।</p>
+            ) : (
+              <div className="space-y-1.5">
+                {Array.from(activeBlockMap.values()).map((b) => (
+                  <div
+                    key={b.student_id}
+                    className="flex items-center justify-between rounded-xl bg-slate-800 px-2.5 py-1.5"
+                  >
+                    <div>
+                      <span className="font-bold text-white">{b.student_name}</span>
+                      <span className="ml-2 text-[10px] text-amber-300">
+                        ({formatRemainingTime(b)})
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleUnblock(b.student_id)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-emerald-500"
+                    >
+                      <Unlock className="w-3 h-3" /> Unblock
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Reports Section */}
+          <div>
+            <div className="text-[11px] font-bold text-amber-400 mb-1">
+              Student Reports ({reports.length})
+            </div>
+            {reports.length === 0 ? (
+              <p className="text-[11px] text-slate-400">कोई नई रिपोर्ट नहीं है।</p>
+            ) : (
+              <div className="space-y-1.5">
+                {reports.map((rep) => (
+                  <div
+                    key={rep.id}
+                    className="rounded-xl border border-slate-700 bg-slate-800/80 p-2 space-y-1"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-rose-300">
+                        {rep.reported_student_name} •{' '}
+                        <span className="text-amber-300">{rep.reason}</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400">by {rep.reporter_name}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-300 truncate">"{rep.message_preview}"</p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBlockTarget({
+                            studentId: rep.reported_student_id,
+                            studentName: rep.reported_student_name,
+                          })
+                        }
+                        className="rounded bg-rose-600 px-2 py-0.5 text-[10px] font-bold text-white"
+                      >
+                        Block User
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleClearReport(rep.id)}
+                        className="rounded bg-slate-700 px-2 py-0.5 text-[10px] text-slate-300"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Subject Filter & Pinned Bar */}
       <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/90 px-3 py-2 no-scrollbar">
@@ -692,6 +1002,7 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
           visibleMessages.map((msg) => {
             const isMine = currentStudent && msg.student_id === currentStudent.id && !msg.is_ai;
             const canDelete = adminUnlocked || isMine;
+            const userBlocked = !msg.is_ai && activeBlockMap.has(msg.student_id);
             return (
               <div
                 key={msg.id}
@@ -714,10 +1025,19 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                           {msg.batch_name}
                         </span>
                       )}
+                      {userBlocked && (
+                        <span className="rounded bg-rose-500/15 px-1.5 py-0.2 text-[9px] font-bold text-rose-500">
+                          Blocked
+                        </span>
+                      )}
                     </>
                   )}
                   {msg.subject && msg.subject !== 'General' && (
-                    <span className={`rounded px-1.5 py-0.2 text-[9px] font-bold ${subjectBadgeColor(msg.subject)}`}>
+                    <span
+                      className={`rounded px-1.5 py-0.2 text-[9px] font-bold ${subjectBadgeColor(
+                        msg.subject
+                      )}`}
+                    >
                       {msg.subject}
                     </span>
                   )}
@@ -767,7 +1087,8 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                   <div>{msg.message}</div>
                 </div>
 
-                <div className="mt-1 flex items-center gap-2 px-1 text-[10px] text-slate-400">
+                {/* Action Row: Reply, Report (for others), Pin/Block/Delete (Admin) */}
+                <div className="mt-1 flex flex-wrap items-center gap-2.5 px-1 text-[10px] text-slate-400">
                   <button
                     type="button"
                     onClick={() => setReplyingTo(msg)}
@@ -775,6 +1096,23 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                   >
                     <Reply className="w-3 h-3" /> Reply
                   </button>
+
+                  {!isMine && !msg.is_ai && (
+                    <button
+                      type="button"
+                      disabled={!!reportedIds[msg.id]}
+                      onClick={() => setReportTarget(msg)}
+                      className={`inline-flex items-center gap-0.5 ${
+                        reportedIds[msg.id]
+                          ? 'text-amber-500 font-bold'
+                          : 'hover:text-amber-500'
+                      }`}
+                    >
+                      <Flag className="w-3 h-3" />{' '}
+                      {reportedIds[msg.id] ? 'Reported' : 'Report'}
+                    </button>
+                  )}
+
                   {adminUnlocked && (
                     <button
                       type="button"
@@ -786,6 +1124,32 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
                       <Pin className="w-3 h-3" /> {msg.is_pinned ? 'Unpin' : 'Pin'}
                     </button>
                   )}
+
+                  {adminUnlocked && !msg.is_ai && !isMine && (
+                    userBlocked ? (
+                      <button
+                        type="button"
+                        onClick={() => handleUnblock(msg.student_id)}
+                        className="inline-flex items-center gap-0.5 text-emerald-500 font-bold hover:underline"
+                      >
+                        <Unlock className="w-3 h-3" /> Unblock
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBlockTarget({
+                            studentId: msg.student_id,
+                            studentName: msg.student_name,
+                          })
+                        }
+                        className="inline-flex items-center gap-0.5 text-rose-400 hover:text-rose-500"
+                      >
+                        <Ban className="w-3 h-3" /> Block
+                      </button>
+                    )
+                  )}
+
                   {canDelete && (
                     <button
                       type="button"
@@ -856,75 +1220,192 @@ export const CommunityChatView: React.FC<CommunityChatViewProps> = ({
         </div>
       )}
 
-      <form
-        onSubmit={handleSend}
-        className="flex flex-col gap-1.5 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5"
-      >
-        {selectedSubject === 'All' && (
-          <div className="flex items-center gap-1 px-1 text-[10px] text-slate-500">
-            <span>Subject:</span>
-            {(['General', 'Physics', 'Chemistry', 'Biology'] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setPostSubject(s)}
-                className={`rounded-md px-2 py-0.5 font-bold ${
-                  postSubject === s
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-center gap-1.5">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleImagePick}
-            className="hidden"
-          />
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-500/15 hover:text-indigo-600"
-            title="Doubt Photo अपलोड करें"
-          >
-            <ImagePlus className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={insertTag}
-            className="shrink-0 rounded-xl bg-amber-500/15 px-2.5 py-2 text-[11px] font-extrabold text-amber-600 dark:text-amber-300 hover:bg-amber-500/25"
-            title="AI को टैग करें"
-          >
-            @dinu
-          </button>
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={
-              currentStudent
-                ? 'डाउट लिखें या फ़ोटो भेजें (@dinu से AI पूछें)...'
-                : 'चैट करने के लिए पहले Student Login करें...'
-            }
-            className="flex-1 rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
-          />
-          <button
-            type="submit"
-            disabled={sending || (!input.trim() && !attachedImage)}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 text-white disabled:opacity-40"
-          >
-            <Send className="w-4 h-4" />
-          </button>
+      {/* Blocked User Notice OR Input Bar */}
+      {myActiveBlock ? (
+        <div className="border-t border-rose-500/30 bg-rose-500/10 p-3 text-center text-xs text-rose-600 dark:text-rose-300">
+          <p className="font-extrabold flex items-center justify-center gap-1.5">
+            <Ban className="w-4 h-4" /> आपको Admin द्वारा ब्लॉक किया गया है (
+            {formatRemainingTime(myActiveBlock)})
+          </p>
+          <p className="mt-0.5 text-[11px] opacity-85">
+            कम्युनिटी नियमों का पालन करें। समय पूरा होने या Admin द्वारा Unblock करने पर आप फिर चैट कर सकेंगे।
+          </p>
         </div>
-      </form>
+      ) : (
+        <form
+          onSubmit={handleSend}
+          className="flex flex-col gap-1.5 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-2.5"
+        >
+          {selectedSubject === 'All' && (
+            <div className="flex items-center gap-1 px-1 text-[10px] text-slate-500">
+              <span>Subject:</span>
+              {(['General', 'Physics', 'Chemistry', 'Biology'] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setPostSubject(s)}
+                  className={`rounded-md px-2 py-0.5 font-bold ${
+                    postSubject === s
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
 
+          <div className="flex items-center gap-1.5">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleImagePick}
+              className="hidden"
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-indigo-500/15 hover:text-indigo-600"
+              title="Doubt Photo अपलोड करें"
+            >
+              <ImagePlus className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={insertTag}
+              className="shrink-0 rounded-xl bg-amber-500/15 px-2.5 py-2 text-[11px] font-extrabold text-amber-600 dark:text-amber-300 hover:bg-amber-500/25"
+              title="AI को टैग करें"
+            >
+              @dinu
+            </button>
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={
+                currentStudent
+                  ? 'डाउट लिखें या फ़ोटो भेजें (@dinu से AI पूछें)...'
+                  : 'चैट करने के लिए पहले Student Login करें...'
+              }
+              className="flex-1 rounded-2xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-2 text-xs focus:outline-none focus:border-indigo-500"
+            />
+            <button
+              type="submit"
+              disabled={sending || (!input.trim() && !attachedImage)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-indigo-600 text-white disabled:opacity-40"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* Admin Block Duration Modal */}
+      {adminUnlocked && blockTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-xs rounded-3xl border border-slate-700 bg-slate-900 p-4 text-white shadow-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-rose-400 flex items-center gap-1.5">
+                <Ban className="w-4 h-4" /> Block {blockTarget.studentName}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setBlockTarget(null)}
+                className="rounded p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-300">
+              चुनें कि आप इस स्टूडेंट को कितनी देर के लिए ब्लॉक करना चाहते हैं:
+            </p>
+            <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => handleApplyBlock(10)}
+                className="rounded-xl bg-slate-800 py-2 hover:bg-amber-600"
+              >
+                10 Minutes
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyBlock(60)}
+                className="rounded-xl bg-slate-800 py-2 hover:bg-amber-600"
+              >
+                1 Hour
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyBlock(1440)}
+                className="rounded-xl bg-slate-800 py-2 hover:bg-amber-600"
+              >
+                24 Hours
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyBlock('permanent')}
+                className="rounded-xl bg-rose-600 py-2 text-white hover:bg-rose-500"
+              >
+                Permanent Block
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Student Report Modal */}
+      {reportTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <form
+            onSubmit={handleSubmitReport}
+            className="w-full max-w-xs rounded-3xl border border-slate-700 bg-slate-900 p-4 text-white shadow-2xl space-y-3"
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-amber-400 flex items-center gap-1.5">
+                <Flag className="w-4 h-4" /> Report {reportTarget.student_name}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setReportTarget(null)}
+                className="rounded p-1 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-400 line-clamp-2">
+              "{reportTarget.message}"
+            </p>
+            <div className="space-y-1.5 text-xs">
+              {['Abusive / Gali-Galauj', 'Spam / Promotion', 'Misleading / Wrong Info'].map(
+                (r) => (
+                  <label
+                    key={r}
+                    className="flex items-center gap-2 rounded-xl bg-slate-800 px-3 py-2 cursor-pointer"
+                  >
+                    <input
+                      type="radio"
+                      name="reportReason"
+                      checked={reportReason === r}
+                      onChange={() => setReportReason(r)}
+                    />
+                    <span>{r}</span>
+                  </label>
+                )
+              )}
+            </div>
+            <button
+              type="submit"
+              className="w-full rounded-xl bg-amber-500 py-2 text-xs font-extrabold text-slate-950 hover:bg-amber-400"
+            >
+              Submit Report to Admin
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Fullscreen Image Lightbox */}
       {previewImage && (
         <div
           onClick={() => setPreviewImage(null)}
