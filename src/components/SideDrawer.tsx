@@ -20,6 +20,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  User,
   X,
 } from 'lucide-react';
 import type { AppSettings, UserRole, ViewRoute } from '../types';
@@ -46,6 +47,7 @@ interface SideDrawerProps {
   onAdminLogout: () => void;
   onUpdateCreatorName: (name: string) => void;
   onAdjustFont: (delta: number) => void;
+    onOpenProfile: () => void;
 }
 
 export const SideDrawer: React.FC<SideDrawerProps> = ({
@@ -67,6 +69,8 @@ export const SideDrawer: React.FC<SideDrawerProps> = ({
   onAdminLogout,
   onUpdateCreatorName,
   onAdjustFont,
+  onOpenProfile,
+
 }) => {
   const isAdmin = role === 'admin';
   const [editingName, setEditingName] = useState(false);
@@ -91,6 +95,15 @@ export const SideDrawer: React.FC<SideDrawerProps> = ({
       route: 'home',
       icon: <Home className="w-4 h-4 text-[#6366F1]" />,
     },
+        {
+      label: 'My Profile & Codes',
+      action: () => {
+        onClose();
+        onOpenProfile();
+      },
+      icon: <User className="w-4 h-4 text-amber-500" />,
+    },
+
     {
       label: 'Saved Questions',
       route: 'save',
