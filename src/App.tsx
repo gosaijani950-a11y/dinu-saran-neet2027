@@ -94,7 +94,8 @@ import { FloatingAiAssistant } from './components/FloatingAiAssistant';
 import { CommunityChatView } from './components/CommunityChatView';
 import { Flame, ArrowLeft } from 'lucide-react';
 import { GlobalSafeErrorBoundary, formatNeetExamText } from './utils/neetEngine';
-import { SecretDirectChatModal } from './components/SecretDirectChatModal';
+import { SecretVaultModal } from './components/SecretVaultModal';
+
 
 const DEFAULT_QUIZ_CONFIG: QuizConfig = {
   subject: 'All',
@@ -1513,7 +1514,7 @@ void studentFeatures.recordQuizInLeaderboard(summary);
 <FloatingAiAssistant settings={settings} />
 
 
-<SecretDirectChatModal
+<SecretVaultModal
   isOpen={showSecretHub}
   onClose={() => setShowSecretHub(false)}
   currentStudent={studentFeatures.studentProfile}
