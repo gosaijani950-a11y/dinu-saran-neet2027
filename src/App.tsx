@@ -656,23 +656,81 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
 
   const handlePracticeCustomPool = useCallback(
     (pool: MCQQuestion[], label: string) => {
-      const drillConfig: QuizConfig = {
-        ...DEFAULT_QUIZ_CONFIG,
-        subject: 'All',
-        chapters: [label],
-        sourceMode: 'bank',
-        questionCount: pool.length,
-        revealMode: 'practice',
-        layoutMode: 'scroll',
-        scoringMode: 'neet',
-        timerMinutes: Math.max(5, Math.ceil(pool.length * 1.2)),
-        untimed: false,
-      };
-      const allInUnified = pool.every((q) => Boolean(unifiedQuestionsMap[q.id]));
-      launchQuizSession(pool, drillConfig, { overrideList: !allInUnified });
+           try {
+        const cleanedPool = (Array.isArray(pool) ? pool : [])
+          .filter((q) => Boolean(q))
+          .map((q, idx) => ({
+            ...q,
+            id: String(q.id || `custom_q_${Date.now()}_${idx}`),
+            subject:
+              q.subject === 'Physics' ||
+              q.subject === 'Chemistry' ||
+              q.subject === 'Botany' ||
+              q.subject === 'Zoology'
+                ? q.subject
+                : 'Botany',
+            chapter: String(q.chapter || label || 'Custom Chapter'),
+            topic: String(q.topic || 'AI Studio'),
+            difficulty:
+              q.difficulty === 'Easy' || q.difficulty === 'Medium' || q.difficulty === 'Hard'
+                ? q.difficulty
+                : 'Medium',
+            question_hi: String(q.question_hi || q.question_en || `प्रश्न ${idx + 1}`),
+            question_en: String(q.question_en || q.question_hi || `Question ${idx + 1}`),
+            options_hi:
+              Array.isArray(q.options_hi) && q.options_hi.length === 4
+                ? q.options_hi.map((o) => String(o || ''))
+                : ['विकल्प 1', 'विकल्प 2', 'विकल्प 3', 'विकल्प 4'],
+            options_en:
+              Array.isArray(q.options_en) && q.options_en.length === 4
+                ? q.options_en.map((o) => String(o || ''))
+                : ['Option 1', 'Option 2', 'Option 3', 'Option 4'],
+            correctIndex:
+              typeof q.correctIndex === 'number' && q.correctIndex >= 0 && q.correctIndex <= 3
+                ? q.correctIndex
+                : 0,
+            explanation_hi: String(q.explanation_hi || 'स्पष्टीकरण उपलब्ध नहीं है।'),
+            explanation_en: String(q.explanation_en || 'Explanation not available.'),
+            isStarred: Boolean(q.isStarred),
+            isSaved: Boolean(q.isSaved),
+            createdAt: typeof q.createdAt === 'number' ? q.createdAt : Date.now(),
+          }));
+
+        if (cleanedPool.length === 0) {
+          try {
+            if (typeof showToast === 'function') showToast('चलाने के लिए कोई प्रश्न उपलब्ध नहीं है।', 'error');
+          } catch {}
+          return;
+        }
+
+        const drillConfig: QuizConfig = {
+          ...DEFAULT_QUIZ_CONFIG,
+          subject: 'All',
+          chapters: [String(label || 'Custom Pool')],
+          sourceMode: 'bank',
+          questionCount: cleanedPool.length,
+          revealMode: 'practice',
+          layoutMode: 'scroll',
+          scoringMode: 'neet',
+          languageMode: 'hindi_only',
+          timerMinutes: Math.max(5, Math.ceil(cleanedPool.length * 1.2)),
+          untimed: false,
+        };
+
+        const allInUnified = cleanedPool.every((q) => Boolean(unifiedQuestionsMap[q.id]));
+        launchQuizSession(cleanedPool, drillConfig, { overrideList: !allInUnified });
+      } catch (err) {
+        console.error('Custom pool launch error:', err);
+        try {
+          if (typeof showToast === 'function') {
+            showToast('लाइव क्विज़ शुरू करने में दिक्कत आई, कृपया दोबारा प्रयास करें।', 'error');
+          }
+        } catch {}
+      }
     },
-    [launchQuizSession, unifiedQuestionsMap]
+    [launchQuizSession, unifiedQuestionsMap, showToast]
   );
+ 
 
   const handleCheckpointUpdate = useCallback(
     (answers: Record<string, number>, currentIndex: number, remainingSeconds: number) => {
