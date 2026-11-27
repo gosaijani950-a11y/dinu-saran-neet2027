@@ -90,6 +90,7 @@ import { useStudentFeatures } from './hooks/useStudentFeatures';
 import { StudentOnboardingModal } from './components/StudentOnboardingModal';
 import { LeaderboardView } from './components/LeaderboardView';
 import { StudyVaultView } from './components/StudyVaultView';
+import { FloatingAiAssistant } from './components/FloatingAiAssistant';
 
 const DEFAULT_QUIZ_CONFIG: QuizConfig = {
   subject: 'All',
@@ -1463,6 +1464,7 @@ void studentFeatures.recordQuizInLeaderboard(summary);
       {!studentFeatures.studentProfile && role !== 'admin' && (
         <StudentOnboardingModal onComplete={studentFeatures.saveStudentProfile} />
       )}
+<FloatingAiAssistant settings={settings} />
 
       {/* Toast Notification Stack */}
       <div
