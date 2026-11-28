@@ -32,6 +32,27 @@ export interface PublishedQuizRecord {
 
 const LOCAL_PUBLISHED_QUIZZES_KEY = 'neet2027_global_published_quizzes_v1';
 const LOCAL_ADMIN_BANK_KEY = 'neet2027_admin_persistent_bank_v1';
+const SYNC_CHANNEL_NAME = 'neet2027_realtime_bank_sync';
+
+function broadcastBankUpdate(questions: MCQQuestion[], quizzes: PublishedQuizRecord[]) {
+  try {
+    window.dispatchEvent(
+      new CustomEvent('neet-published-quizzes-updated', {
+        detail: { quizzes, questions },
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent('neet-questions-bank-synced', {
+        detail: { questions },
+      })
+    );
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel(SYNC_CHANNEL_NAME);
+      bc.postMessage({ type: 'SYNC_ALL', questions, quizzes });
+      bc.close();
+    }
+  } catch {}
+}
 
 export function getStoredApiKey(): string {
   try {
@@ -48,6 +69,19 @@ export function getStoredApiKey(): string {
     }
   } catch {}
   return '';
+}
+
+function generateUuidV4(): string {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 export function normalizeStrictNeetQuestion(
@@ -100,11 +134,17 @@ export function normalizeStrictNeetQuestion(
     )
   );
 
+  // Use valid UUID v4 so Supabase UUID primary key columns never reject inserts
+  const validId =
+    typeof raw?.id === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      raw.id
+    )
+      ? raw.id
+      : generateUuidV4();
+
   return {
-    id: String(
-      raw?.id ||
-        `neet_pro_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`
-    ),
+    id: validId,
     subject: subj as MCQQuestion['subject'],
     chapter: String(raw?.chapter || defaults.chapter || 'NCERT High-Yield'),
     difficulty: mappedDiff,
@@ -183,7 +223,7 @@ export async function generateUltraNeetQuestions(params: {
 
   if (!apiKey) {
     throw new Error(
-      'Gemini API Key नहीं मिली। कृपया Settings (⚙️) में अपनी Gemini API Key सेव करें ताकि Ultra-Level NEET प्रश्न जनरेट हो सकें।'
+      'Gemini API Key नहीं मिली। कृपया Settings (⚙️) में अपनी Gemini API Key सेव करें।'
     );
   }
 
@@ -258,56 +298,47 @@ STRICT QUALITY RULES:
 }
 
 /**
- * Dual-Sync Persistence: Saves Admin Quizzes to Supabase (if configured) + LocalStorage so neither Admin nor Users ever lose them
+ * Schema-Adaptive Supabase Cloud Insert + Persistent Local Storage + Instant UI Broadcast
  */
 export async function publishAndPersistAdminQuiz(
   quiz: PublishedQuizRecord,
   supabaseClient?: any
-): Promise<{ syncedToCloud: boolean; totalSaved: number }> {
+): Promise<{ syncedToCloud: boolean; totalSaved: number; cloudCount: number }> {
   let syncedToCloud = false;
+  let cloudCount = 0;
 
-  // 1. Persist locally in both Admin Bank & Global Published Quizzes
+  // 1. Save immediately in LocalStorage (Admin Persistent Bank + Global Published Quizzes)
+  const existingBank = getPersistentAdminQuestions();
+  const bankMap = new Map<string, MCQQuestion>();
+  for (const q of quiz.questions) {
+    bankMap.set(q.id, q);
+  }
+  for (const q of existingBank) {
+    if (!bankMap.has(q.id)) bankMap.set(q.id, q);
+  }
+  const mergedBank = Array.from(bankMap.values()).slice(0, 5000);
+
+  const existingQuizzes = getAllPublishedQuizzesLocal();
+  const updatedQuizzes = [
+    quiz,
+    ...existingQuizzes.filter((item) => item.id !== quiz.id),
+  ].slice(0, 150);
+
   try {
-    const existingRaw = localStorage.getItem(LOCAL_PUBLISHED_QUIZZES_KEY);
-    const existingList: PublishedQuizRecord[] = existingRaw ? JSON.parse(existingRaw) : [];
-    const updatedList = [
-      quiz,
-      ...existingList.filter((item) => item.id !== quiz.id),
-    ].slice(0, 100);
-    localStorage.setItem(LOCAL_PUBLISHED_QUIZZES_KEY, JSON.stringify(updatedList));
-
-    const bankRaw = localStorage.getItem(LOCAL_ADMIN_BANK_KEY);
-    const bankList: MCQQuestion[] = bankRaw ? JSON.parse(bankRaw) : [];
-    const mergedBank = [...quiz.questions, ...bankList].slice(0, 2000);
     localStorage.setItem(LOCAL_ADMIN_BANK_KEY, JSON.stringify(mergedBank));
-
-    // Notify open tabs immediately
-    window.dispatchEvent(
-      new CustomEvent('neet-published-quizzes-updated', { detail: updatedList })
-    );
+    localStorage.setItem(LOCAL_PUBLISHED_QUIZZES_KEY, JSON.stringify(updatedQuizzes));
   } catch (e) {
-    console.error('Local persistence warning:', e);
+    console.warn('LocalStorage quota warning:', e);
   }
 
-  // 2. Sync to Supabase so ALL student devices receive the quiz immediately
+  // 2. Broadcast immediately so Admin & Open Tabs see the new questions at 0ms
+  broadcastBankUpdate(mergedBank, updatedQuizzes);
+
+  // 3. Push to Supabase 'questions' table using 3-tier schema fallback so EVERY student receives them
   if (supabaseClient) {
     try {
-      // Try inserting into 'published_quizzes' table if present
-      const { error: quizErr } = await supabaseClient.from('published_quizzes').upsert({
-        id: quiz.id,
-        title: quiz.title,
-        subject: quiz.subject,
-        chapter: quiz.chapter,
-        difficulty: quiz.difficulty,
-        question_basis: quiz.questionBasis,
-        duration_mins: quiz.durationMins,
-        questions: quiz.questions,
-        created_at: new Date(quiz.createdAt).toISOString(),
-        created_by: quiz.createdBy,
-      });
-
-      // Also upsert individual questions into 'questions' table for global bank sync
-      const rows = quiz.questions.map((q) => ({
+      // Tier A: Full modern schema with UUIDs
+      const fullRows = quiz.questions.map((q) => ({
         id: q.id,
         subject: q.subject,
         chapter: q.chapter,
@@ -319,20 +350,147 @@ export async function publishAndPersistAdminQuiz(
         correct_index: q.correct_index,
         explanation_hi: q.explanation_hi,
         explanation_en: q.explanation_en,
-        tags: q.tags,
+        tags: Array.isArray(q.tags) ? q.tags : [],
       }));
-      const { error: qTableErr } = await supabaseClient.from('questions').upsert(rows);
 
-      if (!quizErr || !qTableErr) {
+      const { error: tierAErr } = await supabaseClient
+        .from('questions')
+        .upsert(fullRows, { onConflict: 'id' });
+
+      if (!tierAErr) {
         syncedToCloud = true;
+        cloudCount = fullRows.length;
+      } else {
+        // Tier B: Insert without explicit 'id' (let Postgres auto-generate UUID/bigint)
+        const noIdRows = fullRows.map(({ id, ...rest }) => rest);
+        const { error: tierBErr } = await supabaseClient
+          .from('questions')
+          .insert(noIdRows);
+
+        if (!tierBErr) {
+          syncedToCloud = true;
+          cloudCount = noIdRows.length;
+        } else {
+          // Tier C: Core minimal columns only (in case 'tags' or 'options_en' column differs)
+          const minimalRows = quiz.questions.map((q) => ({
+            subject: q.subject,
+            chapter: q.chapter,
+            difficulty: q.difficulty,
+            question_hi: q.question_hi,
+            options_hi: q.options_hi,
+            correct_index: q.correct_index,
+            explanation_hi: q.explanation_hi,
+          }));
+          const { error: tierCErr } = await supabaseClient
+            .from('questions')
+            .insert(minimalRows);
+
+          if (!tierCErr) {
+            syncedToCloud = true;
+            cloudCount = minimalRows.length;
+          } else {
+            console.error('Supabase questions sync error:', tierCErr.message);
+          }
+        }
       }
+
+      // Also persist quiz metadata into 'published_quizzes' if table exists
+      await supabaseClient
+        .from('published_quizzes')
+        .upsert({
+          id: quiz.id,
+          title: quiz.title,
+          subject: quiz.subject,
+          chapter: quiz.chapter,
+          difficulty: quiz.difficulty,
+          question_basis: quiz.questionBasis,
+          duration_mins: quiz.durationMins,
+          questions: quiz.questions,
+          created_at: new Date(quiz.createdAt).toISOString(),
+          created_by: quiz.createdBy,
+        })
+        .catch(() => {});
     } catch (cloudErr) {
-      console.warn('Supabase cloud sync fallback active:', cloudErr);
+      console.warn('Cloud push exception:', cloudErr);
     }
   }
 
-  const allLocal = getAllPublishedQuizzesLocal();
-  return { syncedToCloud, totalSaved: allLocal.length };
+  return { syncedToCloud, totalSaved: mergedBank.length, cloudCount };
+}
+
+/**
+ * Pulls latest cloud questions for ALL Students & Admin and merges with local persistent bank
+ */
+export async function syncCloudQuestionsToAllPanels(
+  supabaseClient?: any
+): Promise<MCQQuestion[]> {
+  const localPersistent = getPersistentAdminQuestions();
+  const map = new Map<string, MCQQuestion>();
+
+  for (const q of localPersistent) {
+    if (q?.id) map.set(q.id, q);
+  }
+
+  if (supabaseClient) {
+    try {
+      const { data: cloudQuestions, error } = await supabaseClient
+        .from('questions')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(2000);
+
+      if (!error && Array.isArray(cloudQuestions)) {
+        cloudQuestions.forEach((raw: any, i: number) => {
+          const norm = normalizeStrictNeetQuestion(raw, i, {
+            subject: raw.subject,
+            chapter: raw.chapter,
+          });
+          map.set(norm.id, norm);
+        });
+      }
+
+      const { data: cloudQuizzes } = await supabaseClient
+        .from('published_quizzes')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (Array.isArray(cloudQuizzes) && cloudQuizzes.length > 0) {
+        const localQuizzes = getAllPublishedQuizzesLocal();
+        const qMap = new Map<string, PublishedQuizRecord>();
+        for (const cq of cloudQuizzes) {
+          qMap.set(String(cq.id), {
+            id: String(cq.id),
+            title: String(cq.title || 'NEET Test'),
+            subject: cq.subject || 'Botany',
+            chapter: String(cq.chapter || 'NCERT'),
+            difficulty: cq.difficulty || 'Hard',
+            questionBasis: cq.question_basis || 'NCERT Line-by-Line',
+            durationMins: Number(cq.duration_mins) || 20,
+            questions: Array.isArray(cq.questions) ? cq.questions : [],
+            createdAt: cq.created_at ? new Date(cq.created_at).getTime() : Date.now(),
+            createdBy: String(cq.created_by || 'Admin'),
+          });
+        }
+        for (const lq of localQuizzes) {
+          if (!qMap.has(lq.id)) qMap.set(lq.id, lq);
+        }
+        const mergedQuizzes = Array.from(qMap.values()).slice(0, 150);
+        try {
+          localStorage.setItem(
+            LOCAL_PUBLISHED_QUIZZES_KEY,
+            JSON.stringify(mergedQuizzes)
+          );
+        } catch {}
+      }
+    } catch {}
+  }
+
+  const mergedAll = Array.from(map.values());
+  try {
+    localStorage.setItem(LOCAL_ADMIN_BANK_KEY, JSON.stringify(mergedAll.slice(0, 5000)));
+  } catch {}
+  return mergedAll;
 }
 
 export function getAllPublishedQuizzesLocal(): PublishedQuizRecord[] {
@@ -355,9 +513,6 @@ export function getPersistentAdminQuestions(): MCQQuestion[] {
   }
 }
 
-/**
- * Community @dinu AI Mentor Responder
- */
 export function hasDinuMention(messageText: string): boolean {
   return /(^|\s)@dinu\b/i.test(String(messageText || ''));
 }
