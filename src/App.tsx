@@ -235,6 +235,37 @@ export default function App() {
     const [showAiStudio, setShowAiStudio] = useState(false);
   const [showPersonalVault, setShowPersonalVault] = useState(false);
 const [dndOverlayOpen, setDndOverlayOpen] = useState(false);
+  
+
+  const [needsFullOnboarding, setNeedsFullOnboarding] = useState<boolean>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
+      return !(saved.username && saved.mobile && saved.security_code && saved.secret_code);
+    } catch {
+      return true;
+    }
+  });
+
+const [globalStreak, setGlobalStreak] = useState<number>(() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem('dinu_neet2027_streak_v1') || '{"count":1}');
+    return Math.max(1, Number(raw.count) || 1);
+  } catch {
+    return 1;
+  }
+});
+
+  
+
+
+  const showToast = useCallback((message: string, tone: 'success' | 'error' | 'info' = 'info') => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setToasts((prev) => [...prev.slice(-2), { id, message, tone }]);
+    window.setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4200);
+  }, []);
+  const studentFeatures = useStudentFeatures(settings, showToast);
     const [adminCommandOpen, setAdminCommandOpen] = useState(false);
   const [appLockConfig, setAppLockConfig] = useState<AppLockConfig>(DEFAULT_LOCK_CONFIG);
   const [sessionUnlockedKey, setSessionUnlockedKey] = useState<boolean>(() => {
@@ -302,35 +333,6 @@ const [dndOverlayOpen, setDndOverlayOpen] = useState(false);
     studentFeatures.studentProfile,
   ]);
 
-  const [needsFullOnboarding, setNeedsFullOnboarding] = useState<boolean>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
-      return !(saved.username && saved.mobile && saved.security_code && saved.secret_code);
-    } catch {
-      return true;
-    }
-  });
-
-const [globalStreak, setGlobalStreak] = useState<number>(() => {
-  try {
-    const raw = JSON.parse(localStorage.getItem('dinu_neet2027_streak_v1') || '{"count":1}');
-    return Math.max(1, Number(raw.count) || 1);
-  } catch {
-    return 1;
-  }
-});
-
-  
-
-
-  const showToast = useCallback((message: string, tone: 'success' | 'error' | 'info' = 'info') => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev.slice(-2), { id, message, tone }]);
-    window.setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4200);
-  }, []);
-  const studentFeatures = useStudentFeatures(settings, showToast);
 
   // Sync Theme and Global Font Scale on <html>
   useEffect(() => {
