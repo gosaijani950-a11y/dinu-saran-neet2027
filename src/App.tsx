@@ -99,6 +99,7 @@ import { StudentProfileModal } from './components/StudentProfileModal';
 import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './components/NeetAdvancedTools';
 import { AiQuizStudioModal } from './components/AiQuizStudioModal';
 import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels } from './services/dinuMentorService';
+import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels, deduplicateQuestionsList, buildDeterministicQuestionId } from './services/dinuMentorService';
 
 
 
@@ -423,14 +424,16 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
     // Intentionally run once on boot; manual re-sync is triggered after Cloud Setup save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  // Sync Admin-generated & Cloud-published MCQs into IndexedDB + All Student Panels
+  // Sync Admin-generated & Cloud-published MCQs cleanly with automatic duplicate cleanup
   useEffect(() => {
-    const saveAndRefreshQuestions = async (incoming: MCQQuestion[]) => {
-      if (!Array.isArray(incoming) || incoming.length === 0) return;
+    const cleanAndSyncBank = async (incoming: MCQQuestion[]) => {
+      const existingAll = await db.questions.toArray();
+      const mergedUnique = deduplicateQuestionsList([...existingAll, ...incoming]);
+
       const now = Date.now();
-      const formatted: MCQQuestion[] = incoming.map((q, idx) => ({
+      const formatted: MCQQuestion[] = mergedUnique.map((q, idx) => ({
         ...q,
-        id: String(q.id || `admin_sync_${now}_${idx}`),
+        id: buildDeterministicQuestionId(q),
         correctIndex:
           typeof (q as any).correctIndex === 'number'
             ? (q as any).correctIndex
@@ -439,16 +442,20 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
             : 0,
         createdAt: typeof q.createdAt === 'number' ? q.createdAt : now - idx,
       }));
-      await db.questions.bulkPut(formatted);
-      await refreshAllData();
+
+      if (existingAll.length !== formatted.length || incoming.length > 0) {
+        await db.questions.clear();
+        await db.questions.bulkPut(formatted);
+        await refreshAllData();
+      }
     };
 
-    void saveAndRefreshQuestions(getPersistentAdminQuestions());
+    void cleanAndSyncBank(getPersistentAdminQuestions());
 
     const onBankSynced = (e: Event) => {
       const detail = (e as CustomEvent)?.detail;
       if (Array.isArray(detail?.questions)) {
-        void saveAndRefreshQuestions(detail.questions);
+        void cleanAndSyncBank(detail.questions);
       }
     };
     window.addEventListener('neet-questions-bank-synced', onBankSynced);
@@ -459,11 +466,11 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
       if (!client) return;
       const cloudMerged = await syncCloudQuestionsToAllPanels(client);
       if (active && cloudMerged.length > 0) {
-        await saveAndRefreshQuestions(cloudMerged);
+        await cleanAndSyncBank(cloudMerged);
       }
     };
     void pullFromSupabase();
-    const timer = window.setInterval(() => void pullFromSupabase(), 20000);
+    const timer = window.setInterval(() => void pullFromSupabase(), 60000);
 
     return () => {
       active = false;
@@ -471,6 +478,7 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
       window.removeEventListener('neet-questions-bank-synced', onBankSynced);
     };
   }, [settings, refreshAllData]);
+
 
   // Keep Supabase auth state synchronized
   useEffect(() => {
