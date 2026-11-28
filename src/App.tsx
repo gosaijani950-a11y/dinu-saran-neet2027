@@ -98,6 +98,7 @@ import { SecretVaultModal } from './components/SecretVaultModal';
 import { StudentProfileModal } from './components/StudentProfileModal';
 import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './components/NeetAdvancedTools';
 import { AiQuizStudioModal } from './components/AiQuizStudioModal';
+import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels } from './services/dinuMentorService';
 
 
 
@@ -422,6 +423,54 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
     // Intentionally run once on boot; manual re-sync is triggered after Cloud Setup save.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // Sync Admin-generated & Cloud-published MCQs into IndexedDB + All Student Panels
+  useEffect(() => {
+    const saveAndRefreshQuestions = async (incoming: MCQQuestion[]) => {
+      if (!Array.isArray(incoming) || incoming.length === 0) return;
+      const now = Date.now();
+      const formatted: MCQQuestion[] = incoming.map((q, idx) => ({
+        ...q,
+        id: String(q.id || `admin_sync_${now}_${idx}`),
+        correctIndex:
+          typeof (q as any).correctIndex === 'number'
+            ? (q as any).correctIndex
+            : typeof (q as any).correct_index === 'number'
+            ? (q as any).correct_index
+            : 0,
+        createdAt: typeof q.createdAt === 'number' ? q.createdAt : now - idx,
+      }));
+      await db.questions.bulkPut(formatted);
+      await refreshAllData();
+    };
+
+    void saveAndRefreshQuestions(getPersistentAdminQuestions());
+
+    const onBankSynced = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (Array.isArray(detail?.questions)) {
+        void saveAndRefreshQuestions(detail.questions);
+      }
+    };
+    window.addEventListener('neet-questions-bank-synced', onBankSynced);
+
+    let active = true;
+    const pullFromSupabase = async () => {
+      const client = getSupabaseClient(settings);
+      if (!client) return;
+      const cloudMerged = await syncCloudQuestionsToAllPanels(client);
+      if (active && cloudMerged.length > 0) {
+        await saveAndRefreshQuestions(cloudMerged);
+      }
+    };
+    void pullFromSupabase();
+    const timer = window.setInterval(() => void pullFromSupabase(), 20000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      window.removeEventListener('neet-questions-bank-synced', onBankSynced);
+    };
+  }, [settings, refreshAllData]);
 
   // Keep Supabase auth state synchronized
   useEffect(() => {
@@ -1637,25 +1686,47 @@ void studentFeatures.recordQuizInLeaderboard(summary);
         streak={globalStreak}
         settings={settings}
       />
-            {showAiStudio && (
-        <AiQuizStudioModal
-          isOpen={showAiStudio}
-          onClose={() => setShowAiStudio(false)}
-          onToast={(msg, tone) => {
-            try {
-              if (typeof showToast === 'function') showToast(msg, tone);
-            } catch {}
-          }}
-          onSaveToChapterBank={(subj, chap, qs) => {
-            try {
-              if (typeof showToast === 'function') {
-                showToast(`✅ ${subj} • ${chap} के आपके पर्सनल पूल में ${qs.length} प्रश्न जुड़ गए।`, 'success');
-              }
-            } catch {}
-          }}
-                    onStartLiveAttempt={(qs, cfg) => {
-            setShowAiStudio(false);
-            window.setTimeout(() => {
+                    {showAiStudio && (
+          <AiQuizStudioModal
+            isOpen={showAiStudio}
+            onClose={() => setShowAiStudio(false)}
+            isAdmin={role === 'admin'}
+            supabaseClient={getSupabaseClient(settings)}
+            onToast={(msg, tone) => {
+              try {
+                if (typeof showToast === 'function') showToast(msg, tone);
+              } catch {}
+            }}
+            onSaveToChapterBank={async (subj, chap, qs) => {
+              try {
+                const now = Date.now();
+                const dbRows: MCQQuestion[] = qs.map((q: any, idx: number) => ({
+                  ...q,
+                  id: String(q.id || `studio_${now}_${idx}`),
+                  subject: subj as SubjectName,
+                  chapter: chap,
+                  correctIndex:
+                    typeof q.correctIndex === 'number'
+                      ? q.correctIndex
+                      : typeof q.correct_index === 'number'
+                      ? q.correct_index
+                      : 0,
+                  createdAt: now - idx,
+                }));
+                await db.questions.bulkPut(dbRows);
+                await refreshAllData();
+                if (typeof showToast === 'function') {
+                  showToast(
+                    `✅ ${subj} • ${chap} के मुख्य Question Bank में ${dbRows.length} प्रश्न स्थायी रूप से जुड़ गए!`,
+                    'success'
+                  );
+                }
+              } catch {}
+            }}
+            onStartLiveAttempt={(qs, cfg) => {
+              setShowAiStudio(false);
+              window.setTimeout(() => {
+
               try {
                 const rawList = Array.isArray(qs) ? qs : [];
                 const safeQs: MCQQuestion[] = rawList.map((item: any, idx: number) => {
