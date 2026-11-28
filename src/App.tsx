@@ -99,6 +99,7 @@ import { StudentProfileModal } from './components/StudentProfileModal';
 import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './components/NeetAdvancedTools';
 import { AiQuizStudioModal } from './components/AiQuizStudioModal';
 import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels, deduplicateQuestionsList, buildDeterministicQuestionId } from './services/dinuMentorService';
+import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels, deduplicateQuestionsList, buildDeterministicQuestionId, syncSharedApiKeyBridge } from './services/dinuMentorService';
 
 
 
@@ -266,6 +267,7 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
     }
     root.style.fontSize = `${settings.fontScale}%`;
     saveAppSettings(settings);
+     if (settings.apiKey) syncSharedApiKeyBridge(settings.apiKey);
   }, [settings]);
 
   const refreshAllData = useCallback(async () => {
@@ -1349,6 +1351,121 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
                   </div>
 
             <NeetCountdownAndFreezeBar streak={globalStreak} onToast={showToast} />
+                              {/* Pro Student & Admin Quick Command Bar: DND Focus Timer + Relax 4-Q Booster + Instant Mock Drill */}
+                <div className="mb-3 grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {/* 1. DND 25m / Custom Focus Timer */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const raw = window.prompt(
+                        '🔕 DND Deep Focus Timer (मिनट डालें: 25, 45, 60 या कोई भी Custom समय):',
+                        '25'
+                      );
+                      if (!raw) return;
+                      const mins = Math.max(1, Math.min(240, Number(raw) || 25));
+                      try {
+                        if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
+                          void document.documentElement.requestFullscreen().catch(() => {});
+                        }
+                      } catch {}
+                      const endAt = Date.now() + mins * 60 * 1000;
+                      localStorage.setItem('neet2027_dnd_end_at', String(endAt));
+                      showToast(
+                        `🔕 DND Focus Mode सक्रिय (${mins} मिनट)! Fullscreen चालू है—अब पूरे फोकस से पढ़ाई करें।`,
+                        'success'
+                      );
+                    }}
+                    className="flex flex-col justify-between rounded-2xl border border-amber-500/35 bg-amber-500/10 p-2.5 text-left transition hover:bg-amber-500/20 active:scale-[0.98]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-amber-300">🔕 DND Focus</span>
+                      <span className="rounded bg-amber-500/25 px-1.5 py-0.5 text-[9px] font-extrabold text-amber-200">
+                        25m+
+                      </span>
+                    </div>
+                    <span className="mt-1 text-[10px] text-amber-100/80">
+                      Custom Timer + Fullscreen
+                    </span>
+                  </button>
+
+                  {/* 2. Relax & Motivate Mode (4 Quick Confidence Booster MCQs) */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      let pool = questions.length > 0 ? questions : await db.questions.toArray();
+                      if (pool.length === 0) {
+                        await ensureStarterSeeded();
+                        pool = await db.questions.toArray();
+                      }
+                      const easyFirst = pool.filter((q) => q.difficulty === 'Easy');
+                      const source = easyFirst.length >= 4 ? easyFirst : pool;
+                      const fourQs = [...source].sort(() => Math.random() - 0.5).slice(0, 4);
+                      if (fourQs.length === 0) {
+                        showToast('प्रश्न बैंक तैयार हो रहा है, 2 सेकंड बाद पुनः दबाएं।', 'info');
+                        return;
+                      }
+                      handlePracticeCustomPool(fourQs, '🌿 Relax & Motivate Booster (4 MCQs)');
+                    }}
+                    className="flex flex-col justify-between rounded-2xl border border-emerald-500/35 bg-emerald-500/10 p-2.5 text-left transition hover:bg-emerald-500/20 active:scale-[0.98]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-emerald-300">🌿 Relax Boost</span>
+                      <span className="rounded bg-emerald-500/25 px-1.5 py-0.5 text-[9px] font-extrabold text-emerald-200">
+                        4 Qs ⚡
+                      </span>
+                    </div>
+                    <span className="mt-1 text-[10px] text-emerald-100/80">
+                      Instant Confidence Drill
+                    </span>
+                  </button>
+
+                  {/* 3. Instant 1-Click Mock Drill (Zero No-Response Guarantee) */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      let pool = questions.length > 0 ? questions : await db.questions.toArray();
+                      if (pool.length === 0) {
+                        await ensureStarterSeeded();
+                        pool = await db.questions.toArray();
+                      }
+                      const drillQs = [...pool].sort(() => Math.random() - 0.5).slice(0, Math.min(20, pool.length));
+                      if (drillQs.length === 0) {
+                        setRoute('quiz-setup');
+                        return;
+                      }
+                      handlePracticeCustomPool(drillQs, `⚡ Instant NEET Mock Drill (${drillQs.length} MCQs)`);
+                    }}
+                    className="flex flex-col justify-between rounded-2xl border border-sky-500/35 bg-sky-500/10 p-2.5 text-left transition hover:bg-sky-500/20 active:scale-[0.98]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-sky-300">⚡ Mock Drill</span>
+                      <span className="rounded bg-sky-500/25 px-1.5 py-0.5 text-[9px] font-extrabold text-sky-200">
+                        Live
+                      </span>
+                    </div>
+                    <span className="mt-1 text-[10px] text-sky-100/80">
+                      1-Tap 20 MCQ Rapid Test
+                    </span>
+                  </button>
+
+                  {/* 4. Secret Pro Vault */}
+                  <button
+                    type="button"
+                    onClick={() => setShowSecretHub(true)}
+                    className="flex flex-col justify-between rounded-2xl border border-purple-500/35 bg-purple-500/10 p-2.5 text-left transition hover:bg-purple-500/20 active:scale-[0.98]"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black text-purple-300">🔐 Pro Vault</span>
+                      <span className="rounded bg-purple-500/25 px-1.5 py-0.5 text-[9px] font-extrabold text-purple-200">
+                        VIP
+                      </span>
+                    </div>
+                    <span className="mt-1 text-[10px] text-purple-100/80">
+                      Secret Tools & Modes
+                    </span>
+                  </button>
+                </div>
+
 <SmartRevisionAndOmrWidget
   mistakes={mistakes}
   unifiedQuestionsMap={unifiedQuestionsMap}
@@ -1776,7 +1893,8 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
             isOpen={showAiStudio}
             onClose={() => setShowAiStudio(false)}
             isAdmin={role === 'admin'}
-            supabaseClient={getSupabaseClient(settings)}
+             supabaseClient={role === 'admin' ? getSupabaseClient(settings) : undefined}
+
             onToast={(msg, tone) => {
               try {
                 if (typeof showToast === 'function') showToast(msg, tone);
