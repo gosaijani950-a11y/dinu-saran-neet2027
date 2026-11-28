@@ -1,594 +1,526 @@
-import React, { useMemo, useRef, useState } from 'react';
-import {
-  AlertTriangle,
-  Brain,
-  CheckCircle2,
-  Clock,
-  FileText,
-  Film,
-  Flame,
-  Loader2,
-  Play,
-  Sparkles,
-  Target,
-  Upload,
-  X,
-} from 'lucide-react';
-import type { MCQQuestion } from '../types';
+import React, { useMemo, useState } from 'react';
+import { UnifiedQuestionItem } from '../types';
 
-interface NeetAdvancedToolsProps {
-  questions?: MCQQuestion[];
-  allQuestions?: MCQQuestion[];
-  onPracticePool?: (pool: MCQQuestion[], label: string) => void;
-  onStartCustomQuiz?: (questions: MCQQuestion[], label: string) => void;
-  onToast?: (msg: string, tone?: any) => void;
+export interface SmartRevisionAndOmrWidgetProps {
+  questions?: UnifiedQuestionItem[];
+  mistakeIds?: string[];
+  onStartCustomQuiz?: (pool: UnifiedQuestionItem[], title: string) => void;
+  onLaunchQuiz?: (pool: UnifiedQuestionItem[], title: string) => void;
+  onPracticeCustomPool?: (pool: UnifiedQuestionItem[], title: string) => void;
+  onOpenAiStudio?: () => void;
+  showToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-interface MediaItem {
-  id: string;
-  name: string;
-  type: 'video' | 'document';
-  sizeMB: string;
-  summary: string;
-}
-
-const CLEAN_EXAM_QUESTIONS: Record<string, Array<{
-  chapter: string;
-  qHi: string;
-  qEn: string;
-  optsHi: [string, string, string, string];
-  optsEn: [string, string, string, string];
-  correct: number;
-  expHi: string;
-  expEn: string;
-}>> = {
-  Botany: [
-    {
-      chapter: 'Biological Classification',
-      qHi: 'निम्नलिखित कथनों को पढ़िए:\nकथन I: माइकोप्लाज्मा में कोशिका भित्ति का पूर्णतः अभाव होता है और ये बिना ऑक्सीजन के जीवित रह सकते हैं।\nकथन II: डायटम की कोशिका भित्ति सिलिका युक्त होने के कारण अनश्वरी (Indestructible) होती है।',
-      qEn: 'Read the following statements:\nStatement I: Mycoplasma completely lack a cell wall and can survive without oxygen.\nStatement II: The cell walls of diatoms are embedded with silica and thus are indestructible.',
-      optsHi: [
-        'कथन I और कथन II दोनों सही हैं',
-        'कथन I सही है, परंतु कथन II गलत है',
-        'कथन I गलत है, परंतु कथन II सही है',
-        'कथन I और कथन II दोनों गलत हैं',
-      ],
-      optsEn: [
-        'Both Statement I and Statement II are correct',
-        'Statement I is correct but Statement II is incorrect',
-        'Statement I is incorrect but Statement II is correct',
-        'Both Statement I and Statement II are incorrect',
-      ],
-      correct: 0,
-      expHi: 'NCERT कक्षा 11 (जीव जगत का वर्गीकरण): माइकोप्लाज्मा सबसे छोटी जीवित कोशिकाएँ हैं जिनमें कोशिका भित्ति नहीं होती, और डायटम की भित्ति में सिलिका होने से डायटमी मृदा बनती है।',
-      expEn: 'NCERT Class 11 (Biological Classification): Both statements are directly from NCERT text.',
-    },
-    {
-      chapter: 'Cell Cycle and Cell Division',
-      qHi: 'अर्धसूत्री विभाजन-I की किस अवस्था में कियाज्मेटा (Chiasmata) का उपांतीभवन (Terminalisation) संपन्न होता है?',
-      qEn: 'Terminalisation of chiasmata takes place during which stage of Meiosis-I?',
-      optsHi: ['जाइगोटीन', 'पैकीटीन', 'डिप्लोटीन', 'डायाकाइनेसिस'],
-      optsEn: ['Zygotene', 'Pachytene', 'Diplotene', 'Diakinesis'],
-      correct: 3,
-      expHi: 'डायाकाइनेसिस (Diakinesis) पूर्वावस्था-I की अंतिम अवस्था है, जिसमें कियाज्मेटा का उपांतीभवन होता है और गुणसूत्र पूर्णतः संघनित हो जाते हैं।',
-      expEn: 'Diakinesis is marked by terminalisation of chiasmata and full condensation of chromosomes.',
-    },
-  ],
-  Zoology: [
-    {
-      chapter: 'Human Reproduction',
-      qHi: 'अभिकथन (A): अपरा (Placenta) एक अंतःस्रावी ऊतक के रूप में भी कार्य करता है।\nकारण (R): यह hCG, hPL, एस्ट्रोजन तथा प्रोजेस्टोजन जैसे हार्मोन स्रावित करता है।',
-      qEn: 'Assertion (A): Placenta also acts as an endocrine tissue.\nReason (R): It produces hormones like hCG, hPL, estrogens and progestogens.',
-      optsHi: [
-        'A और R दोनों सत्य हैं तथा R, A की सही व्याख्या करता है',
-        'A और R दोनों सत्य हैं, परंतु R, A की सही व्याख्या नहीं करता है',
-        'A सत्य है, परंतु R असत्य है',
-        'A असत्य है, परंतु R सत्य है',
-      ],
-      optsEn: [
-        'Both A and R are true and R is the correct explanation of A',
-        'Both A and R are true but R is not the correct explanation of A',
-        'A is true but R is false',
-        'A is false but R is true',
-      ],
-      correct: 0,
-      expHi: 'NCERT मानव जनन: अपरा भ्रूण को पोषण देने के साथ-साथ hCG, hPL, एस्ट्रोजन और प्रोजेस्टोजन स्रावित करके अंतःस्रावी कार्य भी करता है।',
-      expEn: 'NCERT Human Reproduction: Placenta secretes hCG, hPL, estrogens, and progestogens.',
-    },
-  ],
-  Physics: [
-    {
-      chapter: 'Ray Optics',
-      qHi: 'यदि काँच ($\\mu = 1.5$) के एक उभयोत्तल लेंस (Equiconvex Lens) की वायु में फोकस दूरी $20\\text{ cm}$ है, तो इसे जल ($\\mu = 1.33$) में डुबोने पर इसकी फोकस दूरी क्या होगी?',
-      qEn: 'If an equiconvex lens of glass ($\\mu = 1.5$) has a focal length of $20\\text{ cm}$ in air, what happens to its focal length when immersed in water ($\\mu = 1.33$)?',
-      optsHi: ['लगभग $78\\text{ cm}$ हो जाएगी (बढ़ जाएगी)', '$5\\text{ cm}$ हो जाएगी (घट जाएगी)', '$20\\text{ cm}$ ही रहेगी', 'अवतल लेंस की भाँति कार्य करेगा'],
-      optsEn: ['Increases to approx $78\\text{ cm}$', 'Decreases to $5\\text{ cm}$', 'Remains $20\\text{ cm}$', 'Behaves as a diverging lens'],
-      correct: 0,
-      expHi: 'लेंस मेकर सूत्र से $\\frac{f_w}{f_a} = \\frac{\\mu_g - 1}{(\\mu_g / \\mu_w) - 1} = \\frac{0.5}{(1.5/1.33)-1} \\approx 3.9$, अतः $f_w \\approx 78\\text{ cm}$।',
-      expEn: 'Using Lens Maker’s formula, $f_w \\approx 3.9 \\times 20 = 78\\text{ cm}$.',
-    },
-  ],
-  Chemistry: [
-    {
-      chapter: 'Coordination Compounds',
-      qHi: '$[\\text{Ni(CN)}_4]^{2-}$ संकुल आयन की ज्यामिति और चुंबकीय प्रकृति क्या होती है?',
-      qEn: 'What are the geometry and magnetic nature of the complex ion $[\\text{Ni(CN)}_4]^{2-}$?',
-      optsHi: [
-        'वर्ग समतलीय (Square Planar) तथा प्रतिचुंबकीय (Diamagnetic)',
-        'चतुष्फलकीय (Tetrahedral) तथा अनुचुंबकीय (Paramagnetic)',
-        'वर्ग समतलीय तथा अनुचुंबकीय',
-        'चतुष्फलकीय तथा प्रतिचुंबकीय',
-      ],
-      optsEn: [
-        'Square planar and diamagnetic',
-        'Tetrahedral and paramagnetic',
-        'Square planar and paramagnetic',
-        'Tetrahedral and diamagnetic',
-      ],
-      correct: 0,
-      expHi: 'प्रबल क्षेत्र लिगैंड $\\text{CN}^-$ की उपस्थिति में $\\text{Ni}^{2+}$ ($3d^8$) के अयुग्मित इलेक्ट्रॉनों का युग्मन हो जाता है, जिससे $dsp^2$ संकरण, वर्ग समतलीय ज्यामिति और प्रतिचुंबकीय प्रकृति प्राप्त होती है।',
-      expEn: 'Strong field ligand $\\text{CN}^-$ pairs up electrons in $\\text{Ni}^{2+}$ ($3d^8$), giving $dsp^2$ hybridisation, square planar shape, and diamagnetism.',
-    },
-  ],
-};
-
-function makeSafeMcq(raw: any, idx: number): MCQQuestion {
-  const optsHi = Array.isArray(raw?.options_hi) && raw.options_hi.length === 4
-    ? raw.options_hi.map((o: any) => String(o ?? ''))
-    : ['विकल्प A', 'विकल्प B', 'विकल्प C', 'विकल्प D'];
-  const optsEn = Array.isArray(raw?.options_en) && raw.options_en.length === 4
-    ? raw.options_en.map((o: any) => String(o ?? ''))
-    : ['Option A', 'Option B', 'Option C', 'Option D'];
-  const corr =
-    typeof raw?.correct_index === 'number' && raw.correct_index >= 0 && raw.correct_index <= 3
-      ? raw.correct_index
-      : typeof raw?.correctIndex === 'number' && raw.correctIndex >= 0 && raw.correctIndex <= 3
-      ? raw.correctIndex
-      : 0;
-
-  return {
-    id: String(raw?.id || `adv_tool_${Date.now()}_${idx}`),
-    subject:
-      raw?.subject === 'Physics' ||
-      raw?.subject === 'Chemistry' ||
-      raw?.subject === 'Botany' ||
-      raw?.subject === 'Zoology'
-        ? raw.subject
-        : 'Botany',
-    chapter: String(raw?.chapter || 'NCERT Rapid Revision'),
-    difficulty: raw?.difficulty === 'Easy' || raw?.difficulty === 'Hard' ? raw.difficulty : 'Medium',
-    question_hi: String(raw?.question_hi || raw?.question_en || `प्रश्न ${idx + 1}`),
-    question_en: String(raw?.question_en || raw?.question_hi || `Question ${idx + 1}`),
-    options_hi: optsHi,
-    options_en: optsEn,
-    correct_index: corr,
-    explanation_hi: String(raw?.explanation_hi || 'सही विकल्प का चयन करें।'),
-    explanation_en: String(raw?.explanation_en || 'Select the right option.'),
-    tags: Array.isArray(raw?.tags) ? raw.tags.map(String) : ['NTA Pattern'],
-    isStarred: Boolean(raw?.isStarred),
-    isSaved: Boolean(raw?.isSaved),
-  };
-}
-
-function readGeminiKey(): string {
-  try {
-    const direct = localStorage.getItem('gemini_api_key') || localStorage.getItem('neet_gemini_api_key');
-    if (direct && direct.trim().length > 10) return direct.trim();
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (!k) continue;
-      const val = localStorage.getItem(k) || '';
-      const m = val.match(/AIzaSy[0-9A-Za-z_-]{30,}/);
-      if (m) return m[0];
-    }
-  } catch {}
-  return '';
-}
-
-export const NeetAdvancedTools: React.FC<NeetAdvancedToolsProps> = ({
-  questions,
-  allQuestions,
-  onPracticePool,
+export const SmartRevisionAndOmrWidget: React.FC<SmartRevisionAndOmrWidgetProps> = ({
+  questions = [],
+  mistakeIds = [],
   onStartCustomQuiz,
-  onToast,
+  onLaunchQuiz,
+  onPracticeCustomPool,
+  onOpenAiStudio,
+  showToast,
 }) => {
-  const [activeTool, setActiveTool] = useState<'media_drill' | 'ncert_traps' | 'sm2_recall' | 'omr_sim'>('media_drill');
-  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
-  const [generatedDrill, setGeneratedDrill] = useState<MCQQuestion[]>([]);
-  const [isBuilding, setIsBuilding] = useState<boolean>(false);
-  const [selectedSubject, setSelectedSubject] = useState<'Physics' | 'Chemistry' | 'Botany' | 'Zoology'>('Botany');
-  const [omrAnswers, setOmrAnswers] = useState<Record<number, number>>({});
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [activeTab, setActiveTab] = useState<'video' | 'trap' | 'sm2' | 'omr'>('video');
+  const [selectedSubject, setSelectedSubject] = useState<string>('All');
+  const [topicInput, setTopicInput] = useState<string>('');
+  const [youtubeUrl, setYoutubeUrl] = useState<string>('');
+  const [questionCount, setQuestionCount] = useState<number>(15);
+  const [trapMode, setTrapMode] = useState<'all' | 'statement' | 'assertion'>('all');
 
-  const sourceList = Array.isArray(questions)
-    ? questions
-    : Array.isArray(allQuestions)
-    ? allQuestions
-    : [];
+  // Live OMR State with NEET +4/-1 Auto Evaluator
+  const [omrCount, setOmrCount] = useState<number>(45);
+  const [omrAnswers, setOmrAnswers] = useState<Record<number, string>>({});
+  const [omrAnswerKey, setOmrAnswerKey] = useState<string>('');
+  const [omrSubmitted, setOmrSubmitted] = useState<boolean>(false);
 
-  const safeBank = useMemo(
-    () => sourceList.filter(Boolean).map((q, i) => makeSafeMcq(q, i)),
-    [sourceList]
-  );
-
-  const handleUploadMedia = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    try {
-      const added: MediaItem[] = [];
-      for (const file of Array.from(files)) {
-        const isVid =
-          file.type.startsWith('video/') ||
-          /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(file.name);
-        let snippet = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
-        if (!isVid && /\.(txt|md|csv)$/i.test(file.name)) {
-          try {
-            const raw = await file.slice(0, 30000).text();
-            snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 400) || snippet;
-          } catch {}
-        }
-        added.push({
-          id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          name: file.name,
-          type: isVid ? 'video' : 'document',
-          sizeMB: `${Math.max(0.1, file.size / (1024 * 1024)).toFixed(1)} MB`,
-          summary: snippet,
-        });
-      }
-      setMediaItems((prev) => [...prev, ...added]);
-      onToast?.(`✅ ${added.length} फ़ाइल/वीडियो अपलोड हो गई।`, 'success');
-    } catch {
-      onToast?.('फ़ाइल अपलोड करते समय त्रुटि आई।', 'error');
-    } finally {
-      if (fileRef.current) fileRef.current.value = '';
+  const launchPool = (pool: UnifiedQuestionItem[], title: string) => {
+    const runner = onStartCustomQuiz || onLaunchQuiz || onPracticeCustomPool;
+    if (!pool || pool.length === 0) {
+      showToast?.('प्रश्न बैंक लोड हो रहा है, कृपया 2 सेकंड बाद दोबारा टैप करें!', 'info');
+      return;
+    }
+    if (runner) {
+      runner(pool, title);
+    } else {
+      showToast?.('क्विज़ इंजन तैयार हो रहा है...', 'info');
     }
   };
 
-  const handleBuildFromMedia = async () => {
-    if (isBuilding) return;
-    setIsBuilding(true);
-    try {
-      const apiKey = readGeminiKey();
-      const contextText = mediaItems.map((m) => `${m.name}: ${m.summary}`).join('\n');
+  const subjectFiltered = useMemo(() => {
+    if (selectedSubject === 'All') return questions;
+    return questions.filter(
+      (q) => (q.subject || '').toLowerCase() === selectedSubject.toLowerCase()
+    );
+  }, [questions, selectedSubject]);
 
-      if (apiKey) {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    {
-                      text: `Generate 10 clean, real NTA NEET exam MCQs in Hindi (with English) for ${selectedSubject}. ${
-                        contextText ? `Based on: ${contextText}` : 'Strict NCERT High-Yield.'
-                      } Return ONLY JSON array: [{"chapter":"...","question_hi":"...","question_en":"...","options_hi":["A","B","C","D"],"options_en":["A","B","C","D"],"correct_index":0,"explanation_hi":"...","explanation_en":"..."}]`,
-                    },
-                  ],
-                },
-              ],
-              generationConfig: { temperature: 0.4, responseMimeType: 'application/json' },
-            }),
-          }
-        );
-        if (res.ok) {
-          const data = await res.json();
-          const txt = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '')
-            .replace(/```json|```/g, '')
-            .trim();
-          const parsed = JSON.parse(txt);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const cleanAi = parsed.slice(0, 10).map((item, i) =>
-              makeSafeMcq({ ...item, subject: selectedSubject, tags: ['Media/Doc AI'] }, i)
-            );
-            setGeneratedDrill(cleanAi);
-            onToast?.(`✨ Gemini AI से ${cleanAi.length} असली NEET प्रश्न तैयार!`, 'success');
-            setIsBuilding(false);
-            return;
-          }
-        }
+  // 1. Video, Lecture & Doc Smart Drill
+  const handleStartTopicDocDrill = () => {
+    const kw = topicInput.trim().toLowerCase();
+    let pool = subjectFiltered;
+    if (kw) {
+      const matched = subjectFiltered.filter(
+        (q) =>
+          (q.question || '').toLowerCase().includes(kw) ||
+          (q.chapter || '').toLowerCase().includes(kw) ||
+          (q.topic || '').toLowerCase().includes(kw) ||
+          (q.explanation || '').toLowerCase().includes(kw)
+      );
+      if (matched.length > 0) {
+        pool = matched;
+      } else {
+        showToast?.(`"${topicInput.trim()}" के लिए ${selectedSubject} से हाई-यील्ड प्रश्न चुने गए हैं।`, 'info');
       }
-
-      const pool = CLEAN_EXAM_QUESTIONS[selectedSubject] || CLEAN_EXAM_QUESTIONS.Botany;
-      const built: MCQQuestion[] = Array.from({ length: Math.min(10, pool.length * 3) }).map((_, idx) => {
-        const item = pool[idx % pool.length];
-        return makeSafeMcq(
-          {
-            id: `clean_exam_${Date.now()}_${idx}`,
-            subject: selectedSubject,
-            chapter: item.chapter,
-            difficulty: idx % 2 === 0 ? 'Hard' : 'Medium',
-            question_hi: item.qHi,
-            question_en: item.qEn,
-            options_hi: item.optsHi,
-            options_en: item.optsEn,
-            correct_index: item.correct,
-            explanation_hi: item.expHi,
-            explanation_en: item.expEn,
-            tags: ['NTA Pattern'],
-          },
-          idx
-        );
-      });
-
-      setGeneratedDrill(built);
-      onToast?.(`✅ ${built.length} साफ़-सुथरे NTA NEET प्रश्न तैयार हो गए!`, 'success');
-    } catch {
-      onToast?.('प्रश्न बनाने में समस्या आई।', 'error');
-    } finally {
-      setIsBuilding(false);
     }
+    const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, questionCount);
+    const label = kw
+      ? `📺 Lecture/Topic Drill: ${topicInput.trim()} (${picked.length} Qs)`
+      : `📺 ${selectedSubject} Smart Doc Drill (${picked.length} Qs)`;
+    launchPool(picked, label);
   };
 
-  const handleSafeLaunch = (qs: MCQQuestion[], title: string) => {
-    try {
-      const valid = (Array.isArray(qs) ? qs : []).map((q, i) => makeSafeMcq(q, i));
-      if (valid.length === 0) {
-        onToast?.('चलाने के लिए प्रश्न उपलब्ध नहीं हैं।', 'error');
-        return;
-      }
-      const launcher = onPracticePool || onStartCustomQuiz;
-      if (typeof launcher === 'function') {
-        launcher(valid, title);
-      }
-    } catch {
-      onToast?.('लाइव क्विज़ शुरू करने में समस्या आई।', 'error');
-    }
+  // 2. NCERT Negative-Marking Trap Hunter (All / Statement-Based / Assertion-Reason)
+  const handleStartTrapDrill = () => {
+    const keywordMap: Record<'all' | 'statement' | 'assertion', string[]> = {
+      all: ['incorrect', 'not true', 'false', 'except', 'mismatch', 'statement', 'assertion', 'reason', 'wrong', 'correct pair'],
+      statement: ['statement i', 'statement ii', 'statement 1', 'statement 2', 'both statement', 'statements'],
+      assertion: ['assertion', 'reason', '(a)', '(r)', 'correct explanation'],
+    };
+
+    const keys = keywordMap[trapMode];
+    const traps = subjectFiltered.filter((q) => {
+      const txt = `${q.question || ''} ${q.explanation || ''}`.toLowerCase();
+      return keys.some((k) => txt.includes(k));
+    });
+
+    const source = traps.length >= 4 ? traps : subjectFiltered;
+    const picked = [...source].sort(() => Math.random() - 0.5).slice(0, questionCount);
+    const modeTag =
+      trapMode === 'statement'
+        ? 'Statement I & II'
+        : trapMode === 'assertion'
+        ? 'Assertion-Reason'
+        : 'Negative-Marking Trap';
+    launchPool(picked, `⚠️ NCERT ${modeTag} Drill (${selectedSubject})`);
   };
+
+  // 3. SM-2 Spaced Active Recall (Prioritizes Unresolved Mistakes + Weakest Subject)
+  const handleStartSm2Recall = (mode: 'mistakes' | 'mixed') => {
+    const mistakeSet = new Set(mistakeIds);
+    const dueMistakes = subjectFiltered.filter((q) => mistakeSet.has(q.id));
+    const fallbackMistakes = questions.filter((q) => mistakeSet.has(q.id));
+
+    let pool: UnifiedQuestionItem[] = [];
+    if (mode === 'mistakes' && (dueMistakes.length > 0 || fallbackMistakes.length > 0)) {
+      const base = dueMistakes.length > 0 ? dueMistakes : fallbackMistakes;
+      pool = [...base].sort(() => Math.random() - 0.5).slice(0, 20);
+    } else {
+      const priority = dueMistakes.slice(0, 10);
+      const rest = subjectFiltered
+        .filter((q) => !mistakeSet.has(q.id))
+        .sort(() => Math.random() - 0.5)
+        .slice(0, Math.max(10, 20 - priority.length));
+      pool = [...priority, ...rest];
+    }
+
+    launchPool(
+      pool,
+      mode === 'mistakes'
+        ? `🧠 SM-2 Mistake Mastery Drill (${pool.length} Qs)`
+        : `🧠 SM-2 Spaced Active Recall Mix (${pool.length} Qs)`
+    );
+  };
+
+  // 4. Live OMR Bubble Sheet + Instant NEET +4 / -1 Score Calculator
+  const toggleOmrBubble = (qNo: number, opt: string) => {
+    if (omrSubmitted) return;
+    setOmrAnswers((prev) => {
+      const next = { ...prev };
+      if (next[qNo] === opt) delete next[qNo];
+      else next[qNo] = opt;
+      return next;
+    });
+  };
+
+  const resetOmr = () => {
+    setOmrAnswers({});
+    setOmrSubmitted(false);
+  };
+
+  const omrResult = useMemo(() => {
+    if (!omrSubmitted) return null;
+    const cleanedKey = omrAnswerKey.toUpperCase().replace(/[^ABCD]/g, '');
+    const attempted = Object.keys(omrAnswers).length;
+    if (!cleanedKey) {
+      return { attempted, hasKey: false, correct: 0, wrong: 0, score: 0, maxScore: omrCount * 4 };
+    }
+    let correct = 0;
+    let wrong = 0;
+    for (let i = 1; i <= omrCount; i++) {
+      const ans = omrAnswers[i];
+      const key = cleanedKey[i - 1];
+      if (!ans || !key) continue;
+      if (ans === key) correct++;
+      else wrong++;
+    }
+    return {
+      attempted,
+      hasKey: true,
+      correct,
+      wrong,
+      score: correct * 4 - wrong * 1,
+      maxScore: Math.min(omrCount, cleanedKey.length) * 4,
+    };
+  }, [omrSubmitted, omrAnswerKey, omrAnswers, omrCount]);
 
   return (
-    <div className="bg-white dark:bg-[#141923] rounded-2xl border border-slate-200 dark:border-white/[0.06] p-4 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4.5 h-4.5 text-[#6366F1]" />
-          <h3 className="text-sm font-bold text-[#0F172A] dark:text-[#F1F5F9]">
-            NEET 2027 Ultra-Advanced Prep Suite
+    <div className="rounded-3xl border border-indigo-500/35 bg-slate-900/90 p-4 shadow-xl backdrop-blur-md">
+      {/* Header */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-black tracking-wide text-indigo-200">
+            ✨ NEET 2027 Ultra-Advanced Prep Suite
           </h3>
+          <p className="text-[11px] text-slate-400">
+            Trap Hunter • SM-2 Spaced Recall • Lecture Drill • Live +4/-1 OMR
+          </p>
         </div>
-
-        <div className="flex flex-wrap gap-1.5">
-          {[
-            { id: 'media_drill', label: 'Video & Doc Quiz', icon: Film },
-            { id: 'ncert_traps', label: 'NCERT Trap Hunter', icon: AlertTriangle },
-            { id: 'sm2_recall', label: 'SM-2 Active Recall', icon: Brain },
-            { id: 'omr_sim', label: 'Live OMR Bubble', icon: Target },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setActiveTool(tab.id as any)}
-                className={`h-7.5 px-2.5 rounded-lg text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer ${
-                  activeTool === tab.id
-                    ? 'bg-[#6366F1] text-white'
-                    : 'bg-[#F4F6FA] dark:bg-[#1C2331] text-[#475569] dark:text-[#94A3B8]'
-                }`}
-              >
-                <Icon className="w-3 h-3" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
+        <span className="rounded-full border border-indigo-500/30 bg-indigo-500/15 px-2.5 py-1 text-[10px] font-black text-indigo-300">
+          {questions.length} MCQs Ready
+        </span>
       </div>
 
-      {activeTool === 'media_drill' && (
-        <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-dashed border-slate-300 dark:border-white/[0.12]">
-            <div className="flex items-center gap-2">
-              <select
-                value={selectedSubject}
-                onChange={(e) => setSelectedSubject(e.target.value as any)}
-                className="h-8 px-2.5 rounded-lg bg-white dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-xs font-semibold text-[#0F172A] dark:text-[#F1F5F9]"
-              >
-                {(['Physics', 'Chemistry', 'Botany', 'Zoology'] as const).map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
+      {/* 4 Mode Tabs */}
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        <button
+          type="button"
+          onClick={() => setActiveTab('video')}
+          className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+            activeTab === 'video'
+              ? 'bg-indigo-600 text-white shadow'
+              : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+          }`}
+        >
+          📺 Video & Doc Quiz
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('trap')}
+          className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+            activeTab === 'trap'
+              ? 'bg-amber-500 text-slate-950 shadow'
+              : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+          }`}
+        >
+          ⚠️ NCERT Trap Hunter
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('sm2')}
+          className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+            activeTab === 'sm2'
+              ? 'bg-emerald-600 text-white shadow'
+              : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+          }`}
+        >
+          🧠 SM-2 Active Recall
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab('omr')}
+          className={`rounded-xl px-3 py-1.5 text-xs font-extrabold transition ${
+            activeTab === 'omr'
+              ? 'bg-rose-600 text-white shadow'
+              : 'bg-slate-800/90 text-slate-300 hover:bg-slate-700'
+          }`}
+        >
+          🎯 Live OMR (+4/-1)
+        </button>
+      </div>
 
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept="video/*,.mp4,.mov,.webm,.mkv,.avi,.pdf,.doc,.docx,.txt,.md,.csv,image/*"
-                onChange={(e) => void handleUploadMedia(e.target.files)}
-                className="hidden"
-              />
-              <button
-                type="button"
-                onClick={() => fileRef.current?.click()}
-                className="h-8 px-3 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-700 dark:text-indigo-300 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+      {/* TAB 1: Video & Doc Quiz */}
+      {activeTab === 'video' && (
+        <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-950/75 p-3.5">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <select
+              value={selectedSubject}
+              onChange={(e) => setSelectedSubject(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+            >
+              <option value="All">All Subjects</option>
+              <option value="Botany">Botany</option>
+              <option value="Zoology">Zoology</option>
+              <option value="Physics">Physics</option>
+              <option value="Chemistry">Chemistry</option>
+            </select>
+            <input
+              type="text"
+              value={topicInput}
+              onChange={(e) => setTopicInput(e.target.value)}
+              placeholder="Topic / NCERT Chapter (e.g. Genetics, Optics)..."
+              className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs text-white placeholder-slate-500 sm:col-span-2"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="url"
+              value={youtubeUrl}
+              onChange={(e) => setYoutubeUrl(e.target.value)}
+              placeholder="Optional: YouTube Lecture Link पेस्ट करें (Revision Reference)..."
+              className="min-w-[200px] flex-1 rounded-xl border border-slate-800 bg-slate-900/80 px-3 py-1.5 text-[11px] text-slate-200 placeholder-slate-500"
+            />
+            {youtubeUrl.trim() && (
+              <a
+                href={youtubeUrl.trim()}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-1.5 text-[11px] font-bold text-rose-200 hover:bg-rose-500/25"
               >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Upload Video / PDF / Doc</span>
-              </button>
+                Open Lecture ↗
+              </a>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="text-slate-400">Qs:</span>
+              {[10, 15, 25, 45].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setQuestionCount(n)}
+                  className={`rounded-lg px-2.5 py-1 text-[11px] font-bold ${
+                    questionCount === n ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={isBuilding}
-                onClick={() => void handleBuildFromMedia()}
-                className="h-8 px-3.5 rounded-lg bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                onClick={handleStartTopicDocDrill}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white shadow hover:bg-indigo-500 active:scale-95"
               >
-                {isBuilding && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Generate NEET MCQs</span>
+                ▶ Start Instant {questionCount}-MCQ Drill
               </button>
-              {generatedDrill.length > 0 && (
+              {onOpenAiStudio && (
                 <button
                   type="button"
-                  onClick={() =>
-                    handleSafeLaunch(generatedDrill, `${selectedSubject} NEET Practice`)
-                  }
-                  className="h-8 px-3.5 rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                  onClick={onOpenAiStudio}
+                  className="rounded-xl border border-indigo-500/40 bg-indigo-500/15 px-3.5 py-2 text-xs font-extrabold text-indigo-200 hover:bg-indigo-500/25"
                 >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  <span>Launch Live Quiz</span>
+                  📄 PDF / Notes AI Studio
                 </button>
               )}
             </div>
           </div>
-
-          {mediaItems.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {mediaItems.map((m) => (
-                <span
-                  key={m.id}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-[11px] font-medium text-[#0F172A] dark:text-[#F1F5F9]"
-                >
-                  {m.type === 'video' ? (
-                    <Film className="w-3 h-3 text-rose-500" />
-                  ) : (
-                    <FileText className="w-3 h-3 text-indigo-500" />
-                  )}
-                  <span className="max-w-[180px] truncate">{m.name}</span>
-                  <span className="text-[10px] text-[#64748B]">({m.sizeMB})</span>
-                  <button
-                    type="button"
-                    onClick={() => setMediaItems((p) => p.filter((x) => x.id !== m.id))}
-                    className="text-[#64748B] hover:text-rose-500 cursor-pointer"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
         </div>
       )}
 
-      {activeTool === 'ncert_traps' && (
-        <div className="p-3.5 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-slate-200 dark:border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
-          <div className="space-y-0.5">
-            <p className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9] flex items-center gap-1.5">
-              <Flame className="w-3.5 h-3.5 text-amber-500" />
-              <span>NCERT Negative-Marking Trap Drill</span>
-            </p>
-            <p className="text-[11px] text-[#64748B]">
-              Targets "Always / Never / Incorrect / Except" phrasing traps across your question bank.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              const pool = safeBank.length > 0 ? safeBank.slice(0, 15) : generatedDrill;
-              if (pool.length === 0) {
-                void handleBuildFromMedia();
-                return;
-              }
-              handleSafeLaunch(pool, 'NCERT Trap Hunter Drill');
-            }}
-            className="h-8.5 px-3.5 rounded-lg bg-[#6366F1] text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-          >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Start Trap Drill</span>
-          </button>
-        </div>
-      )}
+      {/* TAB 2: NCERT Trap Hunter */}
+      {activeTab === 'trap' && (
+        <div className="space-y-3 rounded-2xl border border-amber-500/35 bg-slate-950/75 p-3.5">
+          <p className="text-xs text-slate-300">
+            <b>NCERT Negative-Marking Trap Drill:</b> एग्जामिनर के सबसे पसंदीदा "Incorrect / Not True / Statement I-II / Assertion-Reason" प्रश्नों का प्रहार।
+          </p>
 
-      {activeTool === 'sm2_recall' && (
-        <div className="p-3.5 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-slate-200 dark:border-white/[0.06] flex flex-wrap items-center justify-between gap-2">
-          <div className="space-y-0.5">
-            <p className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9] flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-emerald-500" />
-              <span>SM-2 Spaced Repetition Recall Queue</span>
-            </p>
-            <p className="text-[11px] text-[#64748B]">
-              Re-drills starred and high-yield questions right before memory decay curve drops.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              const starred = safeBank.filter((q) => q.isStarred || q.isSaved).slice(0, 20);
-              const pool = starred.length > 0 ? starred : safeBank.slice(0, 15);
-              if (pool.length === 0) {
-                onToast?.('पहले कुछ प्रश्नों को Star/Save करें या AI Studio से बनाएं।', 'info');
-                return;
-              }
-              handleSafeLaunch(pool, 'SM-2 Active Recall Session');
-            }}
-            className="h-8.5 px-3.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>Launch Recall Queue</span>
-          </button>
-        </div>
-      )}
-
-      {activeTool === 'omr_sim' && (
-        <div className="p-3.5 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-slate-200 dark:border-white/[0.06] space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9]">
-              Quick 20-Bubble NEET OMR Sheet Simulator
-            </span>
-            <button
-              type="button"
-              onClick={() => setOmrAnswers({})}
-              className="text-[11px] font-semibold text-rose-500 cursor-pointer"
-            >
-              Reset Sheet
-            </button>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {Array.from({ length: 20 }).map((_, qIdx) => (
-              <div
-                key={qIdx}
-                className="flex items-center justify-between px-2 py-1 rounded-lg bg-white dark:bg-[#141923] border border-slate-200 dark:border-white/[0.06]"
+          <div className="flex flex-wrap gap-1.5">
+            {(
+              [
+                ['all', '⚠️ All Negative Traps'],
+                ['statement', '📑 Statement I & II Only'],
+                ['assertion', '🔗 Assertion-Reason Only'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTrapMode(key)}
+                className={`rounded-xl px-3 py-1.5 text-[11px] font-extrabold transition ${
+                  trapMode === key
+                    ? 'bg-amber-500/25 border border-amber-400 text-amber-200'
+                    : 'border border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200'
+                }`}
               >
-                <span className="text-[11px] font-mono-num font-bold text-[#64748B]">
-                  {qIdx + 1}.
-                </span>
-                <div className="flex items-center gap-1">
-                  {(['A', 'B', 'C', 'D'] as const).map((lbl, optIdx) => {
-                    const filled = omrAnswers[qIdx] === optIdx;
-                    return (
-                      <button
-                        key={lbl}
-                        type="button"
-                        onClick={() =>
-                          setOmrAnswers((prev) => ({ ...prev, [qIdx]: optIdx }))
-                        }
-                        className={`w-5.5 h-5.5 rounded-full text-[10px] font-bold border transition-colors cursor-pointer ${
-                          filled
-                            ? 'bg-[#0F172A] dark:bg-[#6366F1] border-[#0F172A] dark:border-[#6366F1] text-white'
-                            : 'border-slate-300 dark:border-white/[0.2] text-[#64748B]'
-                        }`}
-                      >
-                        {lbl}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                {label}
+              </button>
             ))}
           </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={selectedSubject}
+              onChange={(e) => setSelectedSubject(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-bold text-white"
+            >
+              <option value="All">All Subjects</option>
+              <option value="Botany">Botany</option>
+              <option value="Zoology">Zoology</option>
+              <option value="Physics">Physics</option>
+              <option value="Chemistry">Chemistry</option>
+            </select>
+            <button
+              type="button"
+              onClick={handleStartTrapDrill}
+              className="rounded-xl bg-amber-500 px-4 py-2 text-xs font-black text-slate-950 shadow hover:bg-amber-400 active:scale-95"
+            >
+              🔥 Start Trap Drill ({questionCount} Qs)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: SM-2 Active Recall */}
+      {activeTab === 'sm2' && (
+        <div className="space-y-3 rounded-2xl border border-emerald-500/35 bg-slate-950/75 p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-slate-300">
+              आपके <b>{mistakeIds.length} Mistake Bank प्रश्नों</b> पर आधारित Spaced Repetition रिवीज़न।
+            </p>
+            <select
+              value={selectedSubject}
+              onChange={(e) => setSelectedSubject(e.target.value)}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-bold text-white"
+            >
+              <option value="All">All Subjects</option>
+              <option value="Botany">Botany</option>
+              <option value="Zoology">Zoology</option>
+              <option value="Physics">Physics</option>
+              <option value="Chemistry">Chemistry</option>
+            </select>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => handleStartSm2Recall('mistakes')}
+              className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-black text-white shadow hover:bg-emerald-500 active:scale-95"
+            >
+              🧠 Revise Due Mistakes Only (20 Qs)
+            </button>
+            <button
+              type="button"
+              onClick={() => handleStartSm2Recall('mixed')}
+              className="rounded-xl border border-emerald-500/40 bg-emerald-500/15 px-3.5 py-2 text-xs font-extrabold text-emerald-200 hover:bg-emerald-500/25"
+            >
+              ⚡ 50% Mistakes + 50% Fresh Mix
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: Live OMR Bubble Sheet with NEET +4 / -1 Score Evaluator */}
+      {activeTab === 'omr' && (
+        <div className="space-y-3 rounded-2xl border border-rose-500/35 bg-slate-950/75 p-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs">
+              <span className="font-bold text-slate-300">Qs:</span>
+              {[20, 45, 90, 180].map((cnt) => (
+                <button
+                  key={cnt}
+                  type="button"
+                  onClick={() => {
+                    setOmrCount(cnt);
+                    resetOmr();
+                  }}
+                  className={`rounded-lg px-2.5 py-1 font-bold ${
+                    omrCount === cnt ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  {cnt}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-bold text-rose-300">
+                Filled: {Object.keys(omrAnswers).length}/{omrCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => setOmrSubmitted(true)}
+                className="rounded-lg bg-emerald-600 px-3 py-1 font-black text-white hover:bg-emerald-500"
+              >
+                Submit & Score
+              </button>
+              <button
+                type="button"
+                onClick={resetOmr}
+                className="rounded-lg bg-slate-800 px-2.5 py-1 font-bold text-slate-300 hover:bg-slate-700"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+
+          <input
+            type="text"
+            value={omrAnswerKey}
+            onChange={(e) => setOmrAnswerKey(e.target.value)}
+            placeholder="Optional Answer Key पेस्ट करें (e.g. ABCDABCD...) — Submit पर तुरंत NEET +4/-1 स्कोर दिखेगा"
+            className="w-full rounded-xl border border-slate-800 bg-slate-900 px-3 py-1.5 text-[11px] uppercase tracking-wider text-amber-200 placeholder-slate-500"
+          />
+
+          {omrResult && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-500/40 bg-emerald-950/40 px-3 py-2 text-xs">
+              {omrResult.hasKey ? (
+                <>
+                  <span className="font-black text-emerald-300">
+                    🏆 NEET Score: {omrResult.score} / {omrResult.maxScore}
+                  </span>
+                  <span className="text-slate-200">
+                    ✅ {omrResult.correct} (+{omrResult.correct * 4}) • ❌ {omrResult.wrong} (-{omrResult.wrong})
+                  </span>
+                </>
+              ) : (
+                <span className="font-bold text-emerald-200">
+                  🔒 OMR Locked! Total Attempted: {omrResult.attempted}/{omrCount} (ऊपर Answer Key डालकर +4/-1 स्कोर देखें)
+                </span>
+              )}
+            </div>
+          )}
+
+          <div className="grid max-h-60 grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 md:grid-cols-4">
+            {Array.from({ length: omrCount }, (_, idx) => idx + 1).map((qNo) => {
+              const cleanedKey = omrAnswerKey.toUpperCase().replace(/[^ABCD]/g, '');
+              const trueOpt = cleanedKey[qNo - 1];
+              return (
+                <div
+                  key={qNo}
+                  className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/90 px-2.5 py-1.5 text-[11px]"
+                >
+                  <span className="w-7 font-bold text-slate-400">Q{qNo}</span>
+                  <div className="flex gap-1">
+                    {(['A', 'B', 'C', 'D'] as const).map((opt) => {
+                      const active = omrAnswers[qNo] === opt;
+                      let btnStyle = 'border border-slate-700 bg-slate-950 text-slate-300 hover:border-rose-400';
+                      if (omrSubmitted && trueOpt) {
+                        if (opt === trueOpt) btnStyle = 'bg-emerald-500 text-slate-950 font-black';
+                        else if (active && opt !== trueOpt) btnStyle = 'bg-rose-600 text-white font-black';
+                      } else if (active) {
+                        btnStyle = 'bg-rose-500 text-white shadow';
+                      }
+                      return (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => toggleOmrBubble(qNo, opt)}
+                          className={`h-6 w-6 rounded-full text-[10px] font-black transition ${btnStyle}`}
+                        >
+                          {opt}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
   );
 };
-export const NeetCountdownAndFreezeBar: React.FC<any> = () => {
-  const targetDate = new Date('2027-05-02T14:00:00+05:30').getTime();
-  const daysLeft = Math.max(0, Math.ceil((targetDate - Date.now()) / (1000 * 60 * 60 * 24)));
 
-  return (
-    <div className="px-3.5 py-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex flex-wrap items-center justify-between gap-2 text-xs">
-      <span className="font-bold text-[#0F172A] dark:text-[#F1F5F9]">
-        🎯 NEET UG 2027 Countdown: <span className="text-[#6366F1] font-mono-num">{daysLeft} Days Left</span>
-      </span>
-      <span className="text-[11px] text-[#64748B]">
-        NCERT Line-by-Line • Active Recall • Zero-Lag Exam Mode
-      </span>
-    </div>
-  );
-};
-
-export const SmartRevisionAndOmrWidget: React.FC<any> = (props) => {
-  return <NeetAdvancedTools {...props} />;
-};
-
+export default SmartRevisionAndOmrWidget;
