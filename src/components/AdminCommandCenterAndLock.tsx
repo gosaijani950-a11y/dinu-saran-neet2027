@@ -8,7 +8,6 @@ import {
   Plus,
   RefreshCw,
   Shield,
-  ShieldAlert,
   Trash2,
   Unlock,
   UserPlus,
@@ -19,6 +18,7 @@ import type { AppSettings, QuestionReport, StudentSuggestion } from '../types';
 import {
   createAccessKey,
   createSubAdminWithPermissions,
+  DEFAULT_LOCK_CONFIG,
   deleteAccessKey,
   fetchAccessKeys,
   fetchAllAdmins,
@@ -34,6 +34,7 @@ import {
   type LockTargetScope,
   type RegisteredStudentRow,
 } from '../services/appLockAndAdminService';
+import { getSupabaseClient } from '../services/supabaseService';
 
 /* ============================================================================
    1. REAL-TIME FULLSCREEN APP LOCK POPUP (STUDENTS / LOCKED USERS)
@@ -57,8 +58,7 @@ export const AppLockOverlayModal: React.FC<{
     config.whatsapp_channel_url?.trim() ||
     'https://whatsapp.com/channel/0029VbE7gX0FMqrWwudHPx31';
 
-  const handleVerifyKey = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleVerifyKey = async () => {
     if (!keyInput.trim() || submitting) return;
     setSubmitting(true);
     setErrorMsg(null);
@@ -75,7 +75,6 @@ export const AppLockOverlayModal: React.FC<{
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/95 p-4 backdrop-blur-xl">
       <div className="w-full max-w-md rounded-3xl border border-rose-500/40 bg-slate-900 p-6 shadow-2xl">
-        {/* Header Icon & Title */}
         <div className="mb-4 flex flex-col items-center text-center">
           <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-rose-500/40 bg-rose-500/15 text-rose-400 shadow-lg">
             <Lock className="h-7 w-7" />
@@ -89,8 +88,7 @@ export const AppLockOverlayModal: React.FC<{
           </p>
         </div>
 
-        {/* Key Entry Form */}
-        <form onSubmit={handleVerifyKey} className="space-y-3">
+        <div className="space-y-3">
           <div>
             <label className="mb-1 block text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
               Enter your key here
@@ -103,6 +101,12 @@ export const AppLockOverlayModal: React.FC<{
                 onChange={(e) => {
                   setKeyInput(e.target.value);
                   if (errorMsg) setErrorMsg(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleVerifyKey();
+                  }
                 }}
                 placeholder="यहाँ अपनी Access Key डालें..."
                 maxLength={12}
@@ -119,23 +123,22 @@ export const AppLockOverlayModal: React.FC<{
           )}
 
           <button
-            type="submit"
+            type="button"
             disabled={submitting || !keyInput.trim()}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 to-emerald-600 py-3 text-sm font-black text-white shadow-lg transition hover:opacity-95 disabled:opacity-50"
+            onClick={() => void handleVerifyKey()}
+            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-indigo-600 to-emerald-600 py-3 text-sm font-black text-white shadow-lg transition active:scale-[0.98] hover:opacity-95 disabled:opacity-50"
           >
             <Unlock className="h-4 w-4" />
             {submitting ? 'Verifying Key...' : 'Unlock App Now'}
           </button>
-        </form>
+        </div>
 
-        {/* Where to Find Key Section */}
         <div className="mt-5 border-t border-slate-800 pt-4">
           <p className="mb-2.5 text-center text-[11px] font-extrabold uppercase tracking-wider text-slate-400">
             🔑 Key कहाँ से प्राप्त करें? (Find Your Key)
           </p>
 
           <div className="space-y-2.5">
-            {/* Option 1: Direct WhatsApp Number with Pre-filled "Access key 🔑 ?" */}
             <a
               href={waDirectUrl}
               target="_blank"
@@ -160,7 +163,6 @@ export const AppLockOverlayModal: React.FC<{
               </span>
             </a>
 
-            {/* Option 2: WhatsApp Channel Latest Post */}
             <a
               href={channelUrl}
               target="_blank"
@@ -192,7 +194,7 @@ export const AppLockOverlayModal: React.FC<{
 };
 
 /* ============================================================================
-   2. MASTER ADMIN PAGE / COMMAND CENTER MODAL
+   2. MASTER ADMIN PAGE / COMMAND CENTER MODAL (100% BUG-FREE & INSTANT UI)
    ============================================================================ */
 export const AdminCommandCenterModal: React.FC<{
   isOpen: boolean;
@@ -215,10 +217,16 @@ export const AdminCommandCenterModal: React.FC<{
 }) => {
   const [tab, setTab] = useState<'lock' | 'users' | 'admins' | 'reports' | 'suggestions'>('lock');
   const [loading, setLoading] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<{
+    msg: string;
+    tone: 'success' | 'error' | 'info';
+  } | null>(null);
 
-  // Lock & Keys State
-  const [lockConfig, setLockConfig] = useState<AppLockConfig | null>(null);
+  // Lock & Keys State (Initialized with DEFAULT_LOCK_CONFIG so UI is never blank or dead)
+  const [lockConfig, setLockConfig] = useState<AppLockConfig>(DEFAULT_LOCK_CONFIG);
+  const [togglingLock, setTogglingLock] = useState(false);
   const [keysList, setKeysList] = useState<AppAccessKey[]>([]);
+  const [addingKey, setAddingKey] = useState(false);
   const [keyCategory, setKeyCategory] = useState<'limited' | 'public'>('limited');
   const [newKeyCode, setNewKeyCode] = useState('');
   const [usePreset, setUsePreset] = useState<number | 'custom'>(1);
@@ -242,12 +250,19 @@ export const AdminCommandCenterModal: React.FC<{
     can_manage_admins: false,
   });
 
+  const notify = useCallback(
+    (msg: string, tone: 'success' | 'error' | 'info' = 'info') => {
+      setStatusBanner({ msg, tone });
+      onShowToast(msg, tone);
+    },
+    [onShowToast]
+  );
+
   const currentAdminPerm = useMemo(() => {
     if (!adminEmail) return null;
     return adminsList.find((a) => a.email.toLowerCase() === adminEmail.toLowerCase()) || null;
   }, [adminsList, adminEmail]);
 
-  // If no entry in admin_permissions yet, the logged-in primary admin has full Master Owner privileges
   const isMasterOwner =
     !currentAdminPerm || currentAdminPerm.is_master_owner || adminsList.length === 0;
   const canControlLock = isMasterOwner || Boolean(currentAdminPerm?.can_control_lock);
@@ -264,60 +279,110 @@ export const AdminCommandCenterModal: React.FC<{
         fetchRegisteredUsersList(settings),
         fetchAllAdmins(settings),
       ]);
-      setLockConfig(cfg);
+      setLockConfig(cfg || DEFAULT_LOCK_CONFIG);
       setKeysList(keys);
       setUsersList(users);
       setAdminsList(admins);
+    } catch (err: any) {
+      notify(err?.message || 'डेटा लोड करने में समस्या आई।', 'error');
     } finally {
       setLoading(false);
     }
-  }, [settings]);
+  }, [settings, notify]);
 
   useEffect(() => {
-    if (isOpen) {
-      void loadAllCommandData();
-    }
-  }, [isOpen, loadAllCommandData]);
+    if (!isOpen) return;
+    void loadAllCommandData();
+
+    const client = getSupabaseClient(settings);
+    if (!client) return;
+
+    const channel = client
+      .channel('admin-command-center-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'app_registered_users' },
+        () => {
+          void fetchRegisteredUsersList(settings).then(setUsersList);
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'app_access_keys' },
+        () => {
+          void fetchAccessKeys(settings).then(setKeysList);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [isOpen, loadAllCommandData, settings]);
 
   if (!isOpen) return null;
 
-  const handleToggleLock = async (nextLocked: boolean) => {
-    if (!canControlLock || !lockConfig) {
-      onShowToast('आपके पास App Lock बदलने की अनुमति नहीं है।', 'error');
+  const handleToggleLock = async () => {
+    if (togglingLock) return;
+    if (!canControlLock) {
+      notify('आपके पास App Lock बदलने की अनुमति नहीं है।', 'error');
       return;
     }
-    const res = await updateAppLockConfig(settings, {
-      ...lockConfig,
-      is_locked: nextLocked,
-    });
-    if (!res.ok) {
-      onShowToast(res.error || 'लॉक अपडेट विफल', 'error');
-      return;
+    const previousLocked = lockConfig.is_locked;
+    const nextLocked = !previousLocked;
+
+    // 1. Instant Optimistic UI Update (0ms lag on mobile tap)
+    setTogglingLock(true);
+    setLockConfig((prev) => ({ ...prev, is_locked: nextLocked }));
+
+    try {
+      const res = await updateAppLockConfig(settings, {
+        ...lockConfig,
+        is_locked: nextLocked,
+      });
+
+      if (!res.ok) {
+        setLockConfig((prev) => ({ ...prev, is_locked: previousLocked }));
+        notify(`❌ लॉक अपडेट विफल: ${res.error || 'Supabase Error'}`, 'error');
+        return;
+      }
+
+      notify(
+        nextLocked
+          ? `🔒 App Locked LIVE (${lockConfig.target_scope.toUpperCase()} Users पर तुरंत लागू!)`
+          : '🔓 App Unlocked! सभी यूज़र्स के लिए साइट खुल गई है।',
+        'success'
+      );
+    } finally {
+      setTogglingLock(false);
     }
-    setLockConfig({ ...lockConfig, is_locked: nextLocked });
-    onShowToast(
-      nextLocked
-        ? `🔒 App Locked LIVE (${lockConfig.target_scope.toUpperCase()} Users पर तुरंत लागू!)`
-        : '🔓 App Unlocked! सभी यूज़र्स के लिए साइट खुल गई है।',
-      'success'
-    );
   };
 
   const handleChangeScope = async (scope: LockTargetScope) => {
-    if (!canControlLock || !lockConfig) return;
+    if (!canControlLock) return;
+    const prevScope = lockConfig.target_scope;
+    setLockConfig((prev) => ({ ...prev, target_scope: scope }));
     const res = await updateAppLockConfig(settings, { ...lockConfig, target_scope: scope });
     if (res.ok) {
-      setLockConfig({ ...lockConfig, target_scope: scope });
-      onShowToast(`Lock Target अपडेट: ${scope.toUpperCase()} Users`, 'info');
+      notify(`✅ Lock Target अपडेट: ${scope.toUpperCase()} Users`, 'info');
+    } else {
+      setLockConfig((prev) => ({ ...prev, target_scope: prevScope }));
+      notify(res.error || 'Scope अपडेट विफल', 'error');
     }
   };
 
-  const handleAddKey = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAddKey = async () => {
+    if (addingKey) return;
     if (!canManageKeys) {
-      onShowToast('आपके पास Key बनाने की अनुमति नहीं है।', 'error');
+      notify('आपके पास Key बनाने की अनुमति नहीं है।', 'error');
       return;
     }
+    const cleanCode = newKeyCode.trim();
+    if (!cleanCode) {
+      notify('⚠️ कृपया पहले 5 से 11 अक्षरों की Key लिखें!', 'error');
+      return;
+    }
+
     const maxUses =
       keyCategory === 'public'
         ? null
@@ -325,26 +390,32 @@ export const AdminCommandCenterModal: React.FC<{
         ? Math.max(1, parseInt(customUseCount, 10) || 1)
         : usePreset;
 
-    const res = await createAccessKey(settings, {
-      key_code: newKeyCode,
-      key_type: keyCategory,
-      max_uses: maxUses,
-      created_by: adminEmail || 'Master Owner',
-    });
+    setAddingKey(true);
+    try {
+      const res = await createAccessKey(settings, {
+        key_code: cleanCode,
+        key_type: keyCategory,
+        max_uses: maxUses,
+        created_by: adminEmail || 'Master Owner',
+      });
 
-    if (!res.ok) {
-      onShowToast(res.error || 'Key बनाने में त्रुटि', 'error');
-      return;
+      if (!res.ok) {
+        notify(`❌ ${res.error || 'Key बनाने में त्रुटि'}`, 'error');
+        return;
+      }
+
+      setNewKeyCode('');
+      notify(
+        keyCategory === 'public'
+          ? `🌐 Public Key "${cleanCode}" बन गई!`
+          : `🔑 Limited Key "${cleanCode}" बन गई (${maxUses} यूज़ के बाद ऑटो-डिलीट)!`,
+        'success'
+      );
+      const updatedKeys = await fetchAccessKeys(settings);
+      setKeysList(updatedKeys);
+    } finally {
+      setAddingKey(false);
     }
-    setNewKeyCode('');
-    onShowToast(
-      keyCategory === 'public'
-        ? '🌐 Public Unlimited Key बन गई!'
-        : `🔑 Limited Key बन गई (${maxUses} बार उपयोग के बाद ऑटो-डिलीट होगी)!`,
-      'success'
-    );
-    const updatedKeys = await fetchAccessKeys(settings);
-    setKeysList(updatedKeys);
   };
 
   const handleDeleteKey = async (id: string) => {
@@ -352,14 +423,16 @@ export const AdminCommandCenterModal: React.FC<{
     const res = await deleteAccessKey(settings, id);
     if (res.ok) {
       setKeysList((prev) => prev.filter((k) => k.id !== id));
-      onShowToast('Key स्थायी रूप से डिलीट कर दी गई।', 'info');
+      notify('🗑️ Key स्थायी रूप से डिलीट कर दी गई।', 'info');
+    } else {
+      notify(res.error || 'Key डिलीट नहीं हो पाई', 'error');
     }
   };
 
   const handleCreateAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canManageAdmins) {
-      onShowToast('केवल Master Owner या अधिकृत Admin ही नया Admin बना सकता है।', 'error');
+      notify('केवल Master Owner या अधिकृत Admin ही नया Admin बना सकता है।', 'error');
       return;
     }
     const res = await createSubAdminWithPermissions(settings, {
@@ -368,12 +441,12 @@ export const AdminCommandCenterModal: React.FC<{
       permissions: newPerms,
     });
     if (!res.ok) {
-      onShowToast(res.error || 'Admin बनाने में विफल', 'error');
+      notify(res.error || 'Admin बनाने में विफल', 'error');
       return;
     }
     setNewAdminEmail('');
     setNewAdminPassword('');
-    onShowToast('✅ नया Sub-Admin और उसकी Permissions सेव हो गईं!', 'success');
+    notify('✅ नया Sub-Admin और उसकी Permissions सेव हो गईं!', 'success');
     const updated = await fetchAllAdmins(settings);
     setAdminsList(updated);
   };
@@ -389,7 +462,7 @@ export const AdminCommandCenterModal: React.FC<{
       setAdminsList((prev) =>
         prev.map((a) => (a.email === email ? { ...a, [field]: val } : a))
       );
-      onShowToast('Admin Permission अपडेट हो गई।', 'success');
+      notify('Admin Permission अपडेट हो गई।', 'success');
     }
   };
 
@@ -398,7 +471,7 @@ export const AdminCommandCenterModal: React.FC<{
     const res = await removeSubAdmin(settings, email);
     if (res.ok) {
       setAdminsList((prev) => prev.filter((a) => a.email !== email));
-      onShowToast(`Admin (${email}) को हटा दिया गया।`, 'info');
+      notify(`Admin (${email}) को हटा दिया गया।`, 'info');
     }
   };
 
@@ -450,6 +523,28 @@ export const AdminCommandCenterModal: React.FC<{
           </div>
         </div>
 
+        {/* Live Feedback Status Banner (Always visible above modal!) */}
+        {statusBanner && (
+          <div
+            className={`flex items-center justify-between px-4 py-2 text-xs font-black ${
+              statusBanner.tone === 'error'
+                ? 'bg-rose-600 text-white'
+                : statusBanner.tone === 'success'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-indigo-600 text-white'
+            }`}
+          >
+            <span>{statusBanner.msg}</span>
+            <button
+              type="button"
+              onClick={() => setStatusBanner(null)}
+              className="ml-2 rounded px-1.5 py-0.5 text-[10px] hover:bg-black/20"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Navigation Tabs */}
         <div className="flex flex-wrap gap-1.5 border-b border-slate-800 bg-slate-900/90 px-4 py-2.5">
           <button
@@ -465,7 +560,10 @@ export const AdminCommandCenterModal: React.FC<{
           </button>
           <button
             type="button"
-            onClick={() => setTab('users')}
+            onClick={() => {
+              setTab('users');
+              void fetchRegisteredUsersList(settings).then(setUsersList);
+            }}
             className={`rounded-xl px-3 py-1.5 text-xs font-black transition ${
               tab === 'users'
                 ? 'bg-indigo-600 text-white shadow'
@@ -512,7 +610,7 @@ export const AdminCommandCenterModal: React.FC<{
         {/* Tab Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-5">
           {/* ==================== TAB 1: REALTIME APP LOCK & KEYS ==================== */}
-          {tab === 'lock' && lockConfig && (
+          {tab === 'lock' && (
             <div className="space-y-5">
               {/* Live Lock Master Switch & Target Audience */}
               <div className="rounded-2xl border border-rose-500/35 bg-slate-950/80 p-4">
@@ -527,15 +625,19 @@ export const AdminCommandCenterModal: React.FC<{
                   </div>
                   <button
                     type="button"
-                    disabled={!canControlLock}
-                    onClick={() => void handleToggleLock(!lockConfig.is_locked)}
-                    className={`rounded-2xl px-5 py-2.5 text-xs font-black shadow-lg transition ${
+                    disabled={!canControlLock || togglingLock}
+                    onClick={() => void handleToggleLock()}
+                    className={`cursor-pointer select-none rounded-2xl px-5 py-3 text-xs font-black shadow-lg transition active:scale-95 ${
                       lockConfig.is_locked
-                        ? 'bg-rose-600 text-white hover:bg-rose-500'
-                        : 'bg-emerald-600 text-white hover:bg-emerald-500'
-                    } disabled:opacity-40`}
+                        ? 'bg-rose-600 text-white ring-2 ring-rose-400/50 hover:bg-rose-500'
+                        : 'bg-emerald-600 text-white ring-2 ring-emerald-400/50 hover:bg-emerald-500'
+                    } disabled:opacity-50`}
                   >
-                    {lockConfig.is_locked ? '🔒 LOCKED (Tap to Unlock)' : '🔓 UNLOCKED (Tap to Lock)'}
+                    {togglingLock
+                      ? '⏳ Updating...'
+                      : lockConfig.is_locked
+                      ? '🔒 LOCKED (Tap to Unlock)'
+                      : '🔓 UNLOCKED (Tap to Lock)'}
                   </button>
                 </div>
 
@@ -557,7 +659,7 @@ export const AdminCommandCenterModal: React.FC<{
                         type="button"
                         disabled={!canControlLock}
                         onClick={() => void handleChangeScope(sc)}
-                        className={`rounded-xl border px-3 py-2 text-xs font-extrabold transition ${
+                        className={`rounded-xl border px-3 py-2 text-xs font-extrabold transition active:scale-95 ${
                           lockConfig.target_scope === sc
                             ? 'border-indigo-500 bg-indigo-600/25 text-white'
                             : 'border-slate-800 bg-slate-900 text-slate-400 hover:text-slate-200'
@@ -642,26 +744,34 @@ export const AdminCommandCenterModal: React.FC<{
                   </button>
                 </div>
 
-                <form onSubmit={handleAddKey} className="space-y-3">
+                <div className="space-y-3">
                   <div className="flex flex-wrap gap-2">
                     <input
                       type="text"
                       value={newKeyCode}
                       onChange={(e) => setNewKeyCode(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void handleAddKey();
+                        }
+                      }}
                       placeholder="Key लिखें (5 से 11 अक्षर, e.g. NEET@27)..."
                       maxLength={11}
-                      className="min-w-[200px] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2 text-xs font-bold text-white"
+                      className="min-w-[200px] flex-1 rounded-xl border border-slate-700 bg-slate-900 px-3.5 py-2.5 text-xs font-bold text-white"
                     />
                     <button
-                      type="submit"
-                      disabled={!canManageKeys}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-black text-white hover:bg-indigo-500 disabled:opacity-40"
+                      type="button"
+                      disabled={!canManageKeys || addingKey}
+                      onClick={() => void handleAddKey()}
+                      className="inline-flex cursor-pointer select-none items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-black text-white shadow transition active:scale-95 hover:bg-indigo-500 disabled:opacity-40"
                     >
-                      <Plus className="h-4 w-4" /> Add Key
+                      <Plus className="h-4 w-4" />
+                      {addingKey ? 'Adding...' : 'Add Key'}
                     </button>
                   </div>
 
-                  {/* How Many Times Use It (Once, 2, 4, 6, 8, 10, 12 + Custom) */}
+                  {/* How Many Times Use It */}
                   {keyCategory === 'limited' && (
                     <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
                       <span className="mb-2 block text-[11px] font-bold text-slate-300">
@@ -706,7 +816,7 @@ export const AdminCommandCenterModal: React.FC<{
                       </div>
                     </div>
                   )}
-                </form>
+                </div>
 
                 {/* Active Keys List with Manual Delete */}
                 <div className="mt-4 space-y-2">
@@ -781,7 +891,7 @@ export const AdminCommandCenterModal: React.FC<{
                   <div className="space-y-2">
                     {filteredUsers.length === 0 ? (
                       <p className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-xs text-slate-400">
-                        कोई यूज़र रिकॉर्ड नहीं मिला।
+                        कोई यूज़र रिकॉर्ड नहीं मिला। (दूसरे ब्राउज़र को 1 बार रीफ्रेश करें या ऊपर Refresh बटन दबाएं)
                       </p>
                     ) : (
                       filteredUsers.map((u) => (
@@ -809,7 +919,7 @@ export const AdminCommandCenterModal: React.FC<{
                               type="button"
                               onClick={() => {
                                 void navigator.clipboard?.writeText(
-                                  `${u.username} | Secret: ${u.secret_code || ''}`
+                                  `${u.username} | Mobile: ${u.mobile || ''} | Secret: ${u.secret_code || ''}`
                                 );
                                 setCopiedId(u.id);
                                 setTimeout(() => setCopiedId(null), 1500);
@@ -907,7 +1017,6 @@ export const AdminCommandCenterModal: React.FC<{
                 </form>
               )}
 
-              {/* Existing Sub-Admins List */}
               <div className="space-y-2.5">
                 <h4 className="text-xs font-black uppercase text-slate-400">
                   Registered Admins & Access Controls ({adminsList.length})
