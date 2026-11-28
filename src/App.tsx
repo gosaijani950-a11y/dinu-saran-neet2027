@@ -99,6 +99,7 @@ import { StudentProfileModal } from './components/StudentProfileModal';
 import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './components/NeetAdvancedTools';
 import { AiQuizStudioModal } from './components/AiQuizStudioModal';
 import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels, deduplicateQuestionsList, buildDeterministicQuestionId, syncSharedApiKeyBridge } from './services/dinuMentorService';
+import { PersonalMediaVaultModal, DndFocusFullscreenOverlay } from './components/PersonalMediaVaultModal';
 
 
 
@@ -226,6 +227,8 @@ export default function App() {
   const [showSecretHub, setShowSecretHub] = useState(false);
     const [showMyProfile, setShowMyProfile] = useState(false);
     const [showAiStudio, setShowAiStudio] = useState(false);
+  const [showPersonalVault, setShowPersonalVault] = useState(false);
+const [dndOverlayOpen, setDndOverlayOpen] = useState(false);
   const [needsFullOnboarding, setNeedsFullOnboarding] = useState<boolean>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
@@ -1355,25 +1358,8 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
                   {/* 1. DND 25m / Custom Focus Timer */}
                   <button
                     type="button"
-                    onClick={() => {
-                      const raw = window.prompt(
-                        '🔕 DND Deep Focus Timer (मिनट डालें: 25, 45, 60 या कोई भी Custom समय):',
-                        '25'
-                      );
-                      if (!raw) return;
-                      const mins = Math.max(1, Math.min(240, Number(raw) || 25));
-                      try {
-                        if (document.documentElement.requestFullscreen && !document.fullscreenElement) {
-                          void document.documentElement.requestFullscreen().catch(() => {});
-                        }
-                      } catch {}
-                      const endAt = Date.now() + mins * 60 * 1000;
-                      localStorage.setItem('neet2027_dnd_end_at', String(endAt));
-                      showToast(
-                        `🔕 DND Focus Mode सक्रिय (${mins} मिनट)! Fullscreen चालू है—अब पूरे फोकस से पढ़ाई करें।`,
-                        'success'
-                      );
-                    }}
+                                        onClick={() => setDndOverlayOpen(true)}
+
                     className="flex flex-col justify-between rounded-2xl border border-amber-500/35 bg-amber-500/10 p-2.5 text-left transition hover:bg-amber-500/20 active:scale-[0.98]"
                   >
                     <div className="flex items-center justify-between">
@@ -1450,7 +1436,8 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
                   {/* 4. Secret Pro Vault */}
                   <button
                     type="button"
-                    onClick={() => setShowSecretHub(true)}
+                    onClick={() => setShowPersonalVault(true)}
+
                     className="flex flex-col justify-between rounded-2xl border border-purple-500/35 bg-purple-500/10 p-2.5 text-left transition hover:bg-purple-500/20 active:scale-[0.98]"
                   >
                     <div className="flex items-center justify-between">
@@ -1880,6 +1867,17 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
   }}
 
 />
+            <PersonalMediaVaultModal
+        open={showPersonalVault}
+        onClose={() => setShowPersonalVault(false)}
+        showToast={showToast}
+      />
+      <DndFocusFullscreenOverlay
+        open={dndOverlayOpen}
+        initialMinutes={25}
+        onClose={() => setDndOverlayOpen(false)}
+      />
+
       <StudentProfileModal
         isOpen={showMyProfile}
         onClose={() => setShowMyProfile(false)}
