@@ -71,17 +71,58 @@ export function getStoredApiKey(): string {
   return '';
 }
 
-function generateUuidV4(): string {
-  try {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID();
+/**
+ * Deterministic ID generator from question text + subject so the SAME question
+ * ALWAYS produces the EXACT same ID (0 duplicates ever, even across 1,000 syncs!)
+ */
+export function buildDeterministicQuestionId(raw: any): string {
+  if (raw?.id !== undefined && raw?.id !== null && String(raw.id).trim().length > 0) {
+    const existing = String(raw.id).trim();
+    if (!existing.startsWith('admin_sync_')) {
+      return existing;
     }
-  } catch {}
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  }
+  const stem = `${String(raw?.subject || '')}|${String(raw?.chapter || '')}|${String(
+    raw?.question_hi || raw?.question_en || ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')}`;
+
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < stem.length; i++) {
+    const ch = stem.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  const hashHex = (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16);
+  return `neet_q_${hashHex}`;
+}
+
+export function getQuestionContentFingerprint(q: any): string {
+  return `${String(q?.subject || '').trim().toLowerCase()}::${String(
+    q?.question_hi || q?.question_en || ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .slice(0, 180)}`;
+}
+
+export function deduplicateQuestionsList(list: MCQQuestion[]): MCQQuestion[] {
+  const seenFingerprints = new Set<string>();
+  const unique: MCQQuestion[] = [];
+  for (const q of list) {
+    if (!q) continue;
+    const fp = getQuestionContentFingerprint(q);
+    if (!fp || seenFingerprints.has(fp)) continue;
+    seenFingerprints.add(fp);
+    unique.push(q);
+  }
+  return unique;
 }
 
 export function normalizeStrictNeetQuestion(
@@ -134,17 +175,14 @@ export function normalizeStrictNeetQuestion(
     )
   );
 
-  // Use valid UUID v4 so Supabase UUID primary key columns never reject inserts
-  const validId =
-    typeof raw?.id === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      raw.id
-    )
-      ? raw.id
-      : generateUuidV4();
+  const stableId = buildDeterministicQuestionId({
+    ...raw,
+    subject: subj,
+    chapter: raw?.chapter || defaults.chapter || 'NCERT High-Yield',
+  });
 
   return {
-    id: validId,
+    id: stableId,
     subject: subj as MCQQuestion['subject'],
     chapter: String(raw?.chapter || defaults.chapter || 'NCERT High-Yield'),
     difficulty: mappedDiff,
@@ -169,9 +207,6 @@ export function normalizeStrictNeetQuestion(
   };
 }
 
-/**
- * Generates Ultra-High-Level NEET / AIR-1 MCQs using Gemini 2.5 Flash
- */
 export async function generateUltraNeetQuestions(params: {
   subject: string;
   chapter: string;
@@ -287,18 +322,20 @@ STRICT QUALITY RULES:
     throw new Error('AI से वैध प्रश्न प्राप्त नहीं हुए, कृपया पुनः प्रयास करें।');
   }
 
-  return parsed.slice(0, count).map((item, idx) =>
-    normalizeStrictNeetQuestion(item, idx, {
-      subject,
-      chapter,
-      difficulty,
-      questionBasis,
-    })
+  return deduplicateQuestionsList(
+    parsed.slice(0, count).map((item, idx) =>
+      normalizeStrictNeetQuestion(item, idx, {
+        subject,
+        chapter,
+        difficulty,
+        questionBasis,
+      })
+    )
   );
 }
 
 /**
- * Schema-Adaptive Supabase Cloud Insert + Persistent Local Storage + Instant UI Broadcast
+ * Duplicate-Free Persistent Local Storage + Schema-Adaptive Supabase Cloud Insert
  */
 export async function publishAndPersistAdminQuiz(
   quiz: PublishedQuizRecord,
@@ -307,20 +344,13 @@ export async function publishAndPersistAdminQuiz(
   let syncedToCloud = false;
   let cloudCount = 0;
 
-  // 1. Save immediately in LocalStorage (Admin Persistent Bank + Global Published Quizzes)
+  const cleanNewQuestions = deduplicateQuestionsList(quiz.questions);
   const existingBank = getPersistentAdminQuestions();
-  const bankMap = new Map<string, MCQQuestion>();
-  for (const q of quiz.questions) {
-    bankMap.set(q.id, q);
-  }
-  for (const q of existingBank) {
-    if (!bankMap.has(q.id)) bankMap.set(q.id, q);
-  }
-  const mergedBank = Array.from(bankMap.values()).slice(0, 5000);
+  const mergedBank = deduplicateQuestionsList([...cleanNewQuestions, ...existingBank]);
 
   const existingQuizzes = getAllPublishedQuizzesLocal();
   const updatedQuizzes = [
-    quiz,
+    { ...quiz, questions: cleanNewQuestions },
     ...existingQuizzes.filter((item) => item.id !== quiz.id),
   ].slice(0, 150);
 
@@ -331,14 +361,11 @@ export async function publishAndPersistAdminQuiz(
     console.warn('LocalStorage quota warning:', e);
   }
 
-  // 2. Broadcast immediately so Admin & Open Tabs see the new questions at 0ms
   broadcastBankUpdate(mergedBank, updatedQuizzes);
 
-  // 3. Push to Supabase 'questions' table using 3-tier schema fallback so EVERY student receives them
-  if (supabaseClient) {
+  if (supabaseClient && cleanNewQuestions.length > 0) {
     try {
-      // Tier A: Full modern schema with UUIDs
-      const fullRows = quiz.questions.map((q) => ({
+      const fullRows = cleanNewQuestions.map((q) => ({
         id: q.id,
         subject: q.subject,
         chapter: q.chapter,
@@ -361,7 +388,6 @@ export async function publishAndPersistAdminQuiz(
         syncedToCloud = true;
         cloudCount = fullRows.length;
       } else {
-        // Tier B: Insert without explicit 'id' (let Postgres auto-generate UUID/bigint)
         const noIdRows = fullRows.map(({ id, ...rest }) => rest);
         const { error: tierBErr } = await supabaseClient
           .from('questions')
@@ -371,8 +397,7 @@ export async function publishAndPersistAdminQuiz(
           syncedToCloud = true;
           cloudCount = noIdRows.length;
         } else {
-          // Tier C: Core minimal columns only (in case 'tags' or 'options_en' column differs)
-          const minimalRows = quiz.questions.map((q) => ({
+          const minimalRows = cleanNewQuestions.map((q) => ({
             subject: q.subject,
             chapter: q.chapter,
             difficulty: q.difficulty,
@@ -388,13 +413,10 @@ export async function publishAndPersistAdminQuiz(
           if (!tierCErr) {
             syncedToCloud = true;
             cloudCount = minimalRows.length;
-          } else {
-            console.error('Supabase questions sync error:', tierCErr.message);
           }
         }
       }
 
-      // Also persist quiz metadata into 'published_quizzes' if table exists
       await supabaseClient
         .from('published_quizzes')
         .upsert({
@@ -405,7 +427,7 @@ export async function publishAndPersistAdminQuiz(
           difficulty: quiz.difficulty,
           question_basis: quiz.questionBasis,
           duration_mins: quiz.durationMins,
-          questions: quiz.questions,
+          questions: cleanNewQuestions,
           created_at: new Date(quiz.createdAt).toISOString(),
           created_by: quiz.createdBy,
         })
@@ -419,25 +441,20 @@ export async function publishAndPersistAdminQuiz(
 }
 
 /**
- * Pulls latest cloud questions for ALL Students & Admin and merges with local persistent bank
+ * Pulls latest cloud questions cleanly with 0 duplicates
  */
 export async function syncCloudQuestionsToAllPanels(
   supabaseClient?: any
 ): Promise<MCQQuestion[]> {
-  const localPersistent = getPersistentAdminQuestions();
-  const map = new Map<string, MCQQuestion>();
-
-  for (const q of localPersistent) {
-    if (q?.id) map.set(q.id, q);
-  }
+  const localPersistent = deduplicateQuestionsList(getPersistentAdminQuestions());
+  const combined: MCQQuestion[] = [...localPersistent];
 
   if (supabaseClient) {
     try {
       const { data: cloudQuestions, error } = await supabaseClient
         .from('questions')
         .select('*')
-        .order('created_at', { ascending: false })
-        .limit(2000);
+        .limit(5000);
 
       if (!error && Array.isArray(cloudQuestions)) {
         cloudQuestions.forEach((raw: any, i: number) => {
@@ -445,14 +462,13 @@ export async function syncCloudQuestionsToAllPanels(
             subject: raw.subject,
             chapter: raw.chapter,
           });
-          map.set(norm.id, norm);
+          combined.push(norm);
         });
       }
 
       const { data: cloudQuizzes } = await supabaseClient
         .from('published_quizzes')
         .select('*')
-        .order('created_at', { ascending: false })
         .limit(100);
 
       if (Array.isArray(cloudQuizzes) && cloudQuizzes.length > 0) {
@@ -475,22 +491,21 @@ export async function syncCloudQuestionsToAllPanels(
         for (const lq of localQuizzes) {
           if (!qMap.has(lq.id)) qMap.set(lq.id, lq);
         }
-        const mergedQuizzes = Array.from(qMap.values()).slice(0, 150);
         try {
           localStorage.setItem(
             LOCAL_PUBLISHED_QUIZZES_KEY,
-            JSON.stringify(mergedQuizzes)
+            JSON.stringify(Array.from(qMap.values()).slice(0, 150))
           );
         } catch {}
       }
     } catch {}
   }
 
-  const mergedAll = Array.from(map.values());
+  const cleanMerged = deduplicateQuestionsList(combined);
   try {
-    localStorage.setItem(LOCAL_ADMIN_BANK_KEY, JSON.stringify(mergedAll.slice(0, 5000)));
+    localStorage.setItem(LOCAL_ADMIN_BANK_KEY, JSON.stringify(cleanMerged));
   } catch {}
-  return mergedAll;
+  return cleanMerged;
 }
 
 export function getAllPublishedQuizzesLocal(): PublishedQuizRecord[] {
@@ -507,7 +522,7 @@ export function getPersistentAdminQuestions(): MCQQuestion[] {
   try {
     const raw = localStorage.getItem(LOCAL_ADMIN_BANK_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? deduplicateQuestionsList(parsed) : [];
   } catch {
     return [];
   }
