@@ -100,6 +100,12 @@ import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './componen
 import { AiQuizStudioModal } from './components/AiQuizStudioModal';
 import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels, deduplicateQuestionsList, buildDeterministicQuestionId, syncSharedApiKeyBridge } from './services/dinuMentorService';
 import { PersonalMediaVaultModal, DndFocusFullscreenOverlay } from './components/PersonalMediaVaultModal';
+import { AdminCommandCenterModal, AppLockOverlayModal } from './components/AdminCommandCenterAndLock';
+import {
+  DEFAULT_LOCK_CONFIG,
+  fetchAppLockConfig,
+  type AppLockConfig,
+} from './services/appLockAndAdminService';
 
 
 
@@ -229,6 +235,73 @@ export default function App() {
     const [showAiStudio, setShowAiStudio] = useState(false);
   const [showPersonalVault, setShowPersonalVault] = useState(false);
 const [dndOverlayOpen, setDndOverlayOpen] = useState(false);
+    const [adminCommandOpen, setAdminCommandOpen] = useState(false);
+  const [appLockConfig, setAppLockConfig] = useState<AppLockConfig>(DEFAULT_LOCK_CONFIG);
+  const [sessionUnlockedKey, setSessionUnlockedKey] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('dinu_app_unlocked_v1') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    let active = true;
+    void fetchAppLockConfig(settings).then((cfg) => {
+      if (active) setAppLockConfig(cfg);
+    });
+
+    const client = getSupabaseClient(settings);
+    if (!client) return;
+
+    const channel = client
+      .channel('realtime-app-lock-guard')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'app_lock_config', filter: 'id=eq.1' },
+        (payload) => {
+          const nextRow = payload.new as Partial<AppLockConfig> | undefined;
+          if (nextRow && typeof nextRow.is_locked === 'boolean') {
+            setAppLockConfig((prev) => ({ ...prev, ...nextRow }));
+            if (nextRow.is_locked) {
+              try {
+                sessionStorage.removeItem('dinu_app_unlocked_v1');
+              } catch {}
+              setSessionUnlockedKey(false);
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void client.removeChannel(channel);
+    };
+  }, [settings]);
+
+  const shouldShowAppLock = useMemo(() => {
+    if (role === 'admin') return false;
+    if (!appLockConfig.is_locked) return false;
+    if (sessionUnlockedKey) return false;
+    if (needsFullOnboarding || !studentFeatures.studentProfile) return false;
+
+    const isReturningOldUser =
+      localStorage.getItem('dinu_neet2027_existing_user_verified') === '1';
+
+    if (appLockConfig.target_scope === 'all') return true;
+    if (appLockConfig.target_scope === 'new') return !isReturningOldUser;
+    if (appLockConfig.target_scope === 'old') return isReturningOldUser;
+    return true;
+  }, [
+    role,
+    appLockConfig.is_locked,
+    appLockConfig.target_scope,
+    sessionUnlockedKey,
+    needsFullOnboarding,
+    studentFeatures.studentProfile,
+  ]);
+
   const [needsFullOnboarding, setNeedsFullOnboarding] = useState<boolean>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('dinu_neet2027_full_profile_v2') || '{}');
@@ -1774,6 +1847,8 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
         }}
         onAdjustFont={handleAdjustFont}
         onOpenProfile={() => setShowMyProfile(true)}
+                onOpenCommandCenter={() => setAdminCommandOpen(true)}
+
 
       />
 
@@ -2048,6 +2123,31 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
         </AnimatePresence>
       </div>
     </div>
+            <AdminCommandCenterModal
+        isOpen={adminCommandOpen}
+        onClose={() => setAdminCommandOpen(false)}
+        settings={settings}
+        adminEmail={adminEmail}
+        suggestions={suggestions}
+        reports={questionReports}
+        onOpenRoute={(r) => setRoute(r)}
+        onShowToast={showToast}
+      />
+
+      <AppLockOverlayModal
+        isOpen={shouldShowAppLock}
+        config={appLockConfig}
+        settings={settings}
+        onUnlocked={() => {
+          try {
+            sessionStorage.setItem('dinu_app_unlocked_v1', '1');
+            localStorage.setItem('dinu_neet2027_existing_user_verified', '1');
+          } catch {}
+          setSessionUnlockedKey(true);
+          showToast('🔓 Access Key सत्यापित! ऐप अनलॉक हो गया है।', 'success');
+        }}
+      />
+
       </GlobalSafeErrorBoundary>
 
   );
