@@ -222,7 +222,7 @@ export const AdminCommandCenterModal: React.FC<{
     tone: 'success' | 'error' | 'info';
   } | null>(null);
 
-  // Lock & Keys State (Initialized with DEFAULT_LOCK_CONFIG so UI is never blank or dead)
+  // Lock & Keys State
   const [lockConfig, setLockConfig] = useState<AppLockConfig>(DEFAULT_LOCK_CONFIG);
   const [togglingLock, setTogglingLock] = useState(false);
   const [keysList, setKeysList] = useState<AppAccessKey[]>([]);
@@ -297,14 +297,22 @@ export const AdminCommandCenterModal: React.FC<{
     const client = getSupabaseClient(settings);
     if (!client) return;
 
+    const refreshUsers = () => {
+      void fetchRegisteredUsersList(settings).then(setUsersList);
+    };
+
     const channel = client
-      .channel('admin-command-center-live')
+      .channel('admin-command-center-live-v2')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'students' }, refreshUsers)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'student_registry' },
+        refreshUsers
+      )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'app_registered_users' },
-        () => {
-          void fetchRegisteredUsersList(settings).then(setUsersList);
-        }
+        refreshUsers
       )
       .on(
         'postgres_changes',
@@ -331,7 +339,6 @@ export const AdminCommandCenterModal: React.FC<{
     const previousLocked = lockConfig.is_locked;
     const nextLocked = !previousLocked;
 
-    // 1. Instant Optimistic UI Update (0ms lag on mobile tap)
     setTogglingLock(true);
     setLockConfig((prev) => ({ ...prev, is_locked: nextLocked }));
 
@@ -482,7 +489,8 @@ export const AdminCommandCenterModal: React.FC<{
       u.username.toLowerCase().includes(q) ||
       (u.full_name || '').toLowerCase().includes(q) ||
       (u.mobile || '').toLowerCase().includes(q) ||
-      (u.secret_code || '').toLowerCase().includes(q)
+      (u.secret_code || '').toLowerCase().includes(q) ||
+      (u.security_code || '').toLowerCase().includes(q)
     );
   });
 
@@ -523,7 +531,7 @@ export const AdminCommandCenterModal: React.FC<{
           </div>
         </div>
 
-        {/* Live Feedback Status Banner (Always visible above modal!) */}
+        {/* Live Feedback Status Banner */}
         {statusBanner && (
           <div
             className={`flex items-center justify-between px-4 py-2 text-xs font-black ${
@@ -641,7 +649,7 @@ export const AdminCommandCenterModal: React.FC<{
                   </button>
                 </div>
 
-                {/* Scope Selector: All / New Users Only / Old Users Only */}
+                {/* Scope Selector */}
                 <div className="mt-4">
                   <span className="mb-1.5 block text-[11px] font-extrabold uppercase text-slate-400">
                     किस पर लॉक लागू करें? (Target Users)
@@ -718,7 +726,6 @@ export const AdminCommandCenterModal: React.FC<{
                   🔑 Set & Manage Access Keys (5 से 11 अक्षर: Letters, Numbers, Symbols)
                 </h3>
 
-                {/* Public vs Limited Selector */}
                 <div className="mb-3 flex gap-2">
                   <button
                     type="button"
@@ -771,7 +778,6 @@ export const AdminCommandCenterModal: React.FC<{
                     </button>
                   </div>
 
-                  {/* How Many Times Use It */}
                   {keyCategory === 'limited' && (
                     <div className="rounded-xl border border-slate-800 bg-slate-900/80 p-3">
                       <span className="mb-2 block text-[11px] font-bold text-slate-300">
@@ -818,7 +824,7 @@ export const AdminCommandCenterModal: React.FC<{
                   )}
                 </div>
 
-                {/* Active Keys List with Manual Delete */}
+                {/* Active Keys List */}
                 <div className="mt-4 space-y-2">
                   <div className="text-[11px] font-extrabold uppercase text-slate-400">
                     Active Keys ({keysList.length})
@@ -865,7 +871,7 @@ export const AdminCommandCenterModal: React.FC<{
             </div>
           )}
 
-          {/* ==================== TAB 2: USERS LIST & SECRET CODES ==================== */}
+          {/* ==================== TAB 2: USERS LIST, SECURITY & SECRET CODES ==================== */}
           {tab === 'users' && (
             <div className="space-y-3">
               {!canViewUsers ? (
@@ -883,15 +889,15 @@ export const AdminCommandCenterModal: React.FC<{
                       type="text"
                       value={userSearch}
                       onChange={(e) => setUserSearch(e.target.value)}
-                      placeholder="Username, Mobile या Secret Code से खोजें..."
-                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white sm:w-64"
+                      placeholder="Username, Mobile, Security या Secret Code खोजें..."
+                      className="w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-white sm:w-72"
                     />
                   </div>
 
                   <div className="space-y-2">
                     {filteredUsers.length === 0 ? (
                       <p className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-xs text-slate-400">
-                        कोई यूज़र रिकॉर्ड नहीं मिला। (दूसरे ब्राउज़र को 1 बार रीफ्रेश करें या ऊपर Refresh बटन दबाएं)
+                        कोई यूज़र रिकॉर्ड नहीं मिला। ऊपर दाईं ओर Refresh (↻) बटन दबाएं।
                       </p>
                     ) : (
                       filteredUsers.map((u) => (
@@ -911,7 +917,10 @@ export const AdminCommandCenterModal: React.FC<{
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="rounded-lg border border-sky-500/30 bg-sky-500/15 px-2.5 py-1 font-mono text-[11px] font-black text-sky-200">
+                              Security: {u.security_code || '—'}
+                            </span>
                             <span className="rounded-lg border border-amber-500/30 bg-amber-500/15 px-2.5 py-1 font-mono text-[11px] font-black text-amber-200">
                               Secret: {u.secret_code || '—'}
                             </span>
@@ -919,13 +928,13 @@ export const AdminCommandCenterModal: React.FC<{
                               type="button"
                               onClick={() => {
                                 void navigator.clipboard?.writeText(
-                                  `${u.username} | Mobile: ${u.mobile || ''} | Secret: ${u.secret_code || ''}`
+                                  `@${u.username} | Mobile: ${u.mobile || ''} | Security: ${u.security_code || ''} | Secret: ${u.secret_code || ''}`
                                 );
                                 setCopiedId(u.id);
                                 setTimeout(() => setCopiedId(null), 1500);
                               }}
                               className="rounded-lg border border-slate-700 bg-slate-800 p-1.5 text-slate-300 hover:text-white"
-                              title="Copy Details"
+                              title="Copy All Details"
                             >
                               {copiedId === u.id ? (
                                 <Check className="h-3.5 w-3.5 text-emerald-400" />
