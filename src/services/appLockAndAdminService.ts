@@ -65,7 +65,38 @@ export function validateAccessKeyFormat(rawKey: string): string | null {
   return null;
 }
 
+/** Auto-syncs current browser's student profile to Supabase so Admin always sees all users */
+export async function syncLocalStudentProfileToCloud(settings: AppSettings): Promise<void> {
+  const client = getSupabaseClient(settings);
+  if (!client) return;
+  try {
+    const raw = localStorage.getItem('dinu_neet2027_full_profile_v2');
+    if (!raw) return;
+    const saved = JSON.parse(raw);
+    const username = String(saved.username || saved.full_name || '').trim();
+    const mobile = String(saved.mobile || saved.phone || '').trim();
+    if (!username || !mobile) return;
+
+    await client.from('app_registered_users').upsert(
+      {
+        username,
+        full_name: String(saved.full_name || saved.name || username),
+        mobile,
+        security_code: String(saved.security_code || saved.securityCode || ''),
+        secret_code: String(saved.secret_code || saved.secretCode || ''),
+        target_year: String(saved.target_year || '2027'),
+        last_active_at: new Date().toISOString(),
+      },
+      { onConflict: 'username,mobile' }
+    );
+  } catch {
+    // Silent background sync
+  }
+}
+
 export async function fetchAppLockConfig(settings: AppSettings): Promise<AppLockConfig> {
+  void syncLocalStudentProfileToCloud(settings);
+
   const client = getSupabaseClient(settings);
   if (!client) return DEFAULT_LOCK_CONFIG;
   try {
@@ -87,9 +118,22 @@ export async function updateAppLockConfig(
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient(settings);
   if (!client) return { ok: false, error: 'Supabase कॉन्फ़िगर नहीं है।' };
+
+  const current = await fetchAppLockConfig(settings);
+  const payload = {
+    id: 1,
+    is_locked: patch.is_locked !== undefined ? patch.is_locked : current.is_locked,
+    target_scope: patch.target_scope || current.target_scope,
+    lock_title: patch.lock_title || current.lock_title,
+    lock_message: patch.lock_message || current.lock_message,
+    whatsapp_number: patch.whatsapp_number || current.whatsapp_number,
+    whatsapp_channel_url: patch.whatsapp_channel_url || current.whatsapp_channel_url,
+    updated_at: new Date().toISOString(),
+  };
+
   const { error } = await client
     .from('app_lock_config')
-    .upsert({ id: 1, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'id' });
+    .upsert(payload, { onConflict: 'id' });
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
@@ -168,28 +212,54 @@ export async function redeemAccessKey(
 export async function fetchRegisteredUsersList(
   settings: AppSettings
 ): Promise<RegisteredStudentRow[]> {
+  await syncLocalStudentProfileToCloud(settings);
   const client = getSupabaseClient(settings);
   if (!client) return [];
 
-  // Try student_profiles first (standard table in this project)
-  const { data, error } = await client
-    .from('student_profiles')
-    .select('*')
-    .order('created_at', { ascending: false });
+  const mergedMap = new Map<string, RegisteredStudentRow>();
 
-  if (!error && Array.isArray(data)) {
-    return data.map((row: any, idx: number) => ({
-      id: String(row.id || row.username || idx),
-      username: String(row.username || row.student_name || 'Unknown'),
-      full_name: String(row.full_name || row.name || row.username || ''),
-      mobile: String(row.mobile || row.phone || ''),
-      secret_code: String(row.secret_code || row.secretCode || '—'),
-      security_code: String(row.security_code || row.securityCode || '—'),
-      target_year: String(row.target_year || '2027'),
-      created_at: row.created_at,
-    }));
-  }
-  return [];
+  const normalizeRow = (row: any, idx: number, prefix: string): RegisteredStudentRow => ({
+    id: String(row.id || `${prefix}-${row.username || idx}`),
+    username: String(row.username || row.student_name || 'Unknown'),
+    full_name: String(row.full_name || row.name || row.username || ''),
+    mobile: String(row.mobile || row.phone || ''),
+    secret_code: String(row.secret_code || row.secretCode || '—'),
+    security_code: String(row.security_code || row.securityCode || '—'),
+    target_year: String(row.target_year || '2027'),
+    created_at: row.created_at || row.last_active_at,
+  });
+
+  // 1. Read from app_registered_users (multi-browser cloud sync table)
+  try {
+    const { data: regData } = await client
+      .from('app_registered_users')
+      .select('*')
+      .order('last_active_at', { ascending: false });
+    if (Array.isArray(regData)) {
+      regData.forEach((row: any, idx: number) => {
+        const norm = normalizeRow(row, idx, 'reg');
+        const key = `${norm.username.toLowerCase()}_${norm.mobile}`;
+        mergedMap.set(key, norm);
+      });
+    }
+  } catch {}
+
+  // 2. Also merge from student_profiles if present
+  try {
+    const { data: profData } = await client
+      .from('student_profiles')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (Array.isArray(profData)) {
+      profData.forEach((row: any, idx: number) => {
+        const norm = normalizeRow(row, idx, 'prof');
+        const key = `${norm.username.toLowerCase()}_${norm.mobile}`;
+        if (!mergedMap.has(key)) mergedMap.set(key, norm);
+      });
+    }
+  } catch {}
+
+  return Array.from(mergedMap.values());
 }
 
 export async function fetchAllAdmins(settings: AppSettings): Promise<AdminPermissionRecord[]> {
@@ -232,7 +302,6 @@ export async function createSubAdminWithPermissions(
     return { ok: false, error: 'सही Gmail और कम से कम 6 अक्षरों का Password डालें।' };
   }
 
-  // 1. Register user in Supabase Auth (note: keep current owner session safe by using separate ephemeral auth call if possible)
   const { data: signUpData, error: signUpErr } = await client.auth.signUp({
     email: cleanEmail,
     password: params.password,
@@ -242,18 +311,14 @@ export async function createSubAdminWithPermissions(
     return { ok: false, error: signUpErr.message };
   }
 
-  // 2. Insert into public.admins if user_id returned
   if (signUpData?.user?.id) {
     try {
       await client
         .from('admins')
         .upsert({ user_id: signUpData.user.id, email: cleanEmail }, { onConflict: 'user_id' });
-    } catch {
-      // Ignore if already exists
-    }
+    } catch {}
   }
 
-  // 3. Save granular permissions
   const { error: permErr } = await client.from('admin_permissions').upsert(
     {
       email: cleanEmail,
@@ -291,9 +356,7 @@ export async function removeSubAdmin(
   if (!client) return { ok: false, error: 'Supabase कॉन्फ़िगर नहीं है।' };
   try {
     await client.from('admins').delete().eq('email', email);
-  } catch {
-    // Ignore if RLS restricts admins delete
-  }
+  } catch {}
   const { error } = await client
     .from('admin_permissions')
     .delete()
