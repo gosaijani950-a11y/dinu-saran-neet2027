@@ -522,5 +522,41 @@ export const SmartRevisionAndOmrWidget: React.FC<SmartRevisionAndOmrWidgetProps>
     </div>
   );
 };
+export const NeetCountdownAndFreezeBar: React.FC<{
+  targetDateStr?: string;
+  onFreezeToggle?: () => void;
+  isFrozen?: boolean;
+}> = ({ targetDateStr = '2027-05-02', onFreezeToggle, isFrozen = false }) => {
+  const daysLeft = useMemo(() => {
+    const target = new Date(targetDateStr).getTime();
+    const diff = Math.max(0, target - Date.now());
+    return Math.ceil(diff / (1000 * 60 * 60 * 24));
+  }, [targetDateStr]);
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-indigo-500/25 bg-slate-900/80 px-4 py-2 text-xs">
+      <div className="flex items-center gap-2 font-black text-indigo-200">
+        <span>🎯 NEET UG 2027 Countdown:</span>
+        <span className="rounded-lg bg-indigo-500/20 px-2 py-0.5 text-emerald-300">
+          {daysLeft} Days Left
+        </span>
+      </div>
+      <div className="flex items-center gap-2 text-[11px] text-slate-400">
+        <span>NCERT Line-by-Line • Active Recall • Zero-Lag Exam Mode</span>
+        {onFreezeToggle && (
+          <button
+            type="button"
+            onClick={onFreezeToggle}
+            className={`rounded-lg px-2.5 py-0.5 font-bold ${
+              isFrozen ? 'bg-amber-500 text-slate-950' : 'bg-slate-800 text-slate-300'
+            }`}
+          >
+            {isFrozen ? '❄️ Frozen' : '⚡ Live'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export default SmartRevisionAndOmrWidget;
