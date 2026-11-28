@@ -1452,11 +1452,14 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
                   </button>
                 </div>
 
-<SmartRevisionAndOmrWidget
-  mistakes={mistakes}
-  unifiedQuestionsMap={unifiedQuestionsMap}
-  onLaunchPool={(qs, label) => handlePracticeCustomPool(qs, label)}
-/>
+                <SmartRevisionAndOmrWidget
+                  questions={questions}
+                  mistakeIds={mistakes.filter((m) => !m.mastered).map((m) => m.questionId)}
+                  onStartCustomQuiz={(qs, label) => handlePracticeCustomPool(qs, label)}
+                  onOpenAiStudio={() => setShowAiStudio(true)}
+                  showToast={showToast}
+                />
+
 
               <HomeHub
                 creatorName={settings.creatorName}
