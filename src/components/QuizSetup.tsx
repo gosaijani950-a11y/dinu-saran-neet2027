@@ -1,10 +1,11 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
   ChevronRight,
+  Globe,
   Loader2,
   Pause,
   Play,
@@ -37,6 +38,12 @@ import { useSubjects } from '../utils/subjects';
 import { processUploadedFiles } from '../services/fileProcessor';
 import { saveModuleBundle } from '../db/database';
 import { SegmentedControl } from './SegmentedControl';
+import {
+  getAllPublishedQuizzesLocal,
+  getPersistentAdminQuestions,
+  type NeetQuestionBasis,
+  type PublishedQuizRecord,
+} from '../services/dinuMentorService';
 
 interface QuizSetupProps {
   role: UserRole;
@@ -66,13 +73,27 @@ interface QuizSetupProps {
   onToast: (msg: string, tone?: 'success' | 'error' | 'info') => void;
 }
 
+type ExtendedDifficulty = DifficultyLevel | 'Ultra';
+
 const QUESTION_PRESETS = [20, 40, 60, 100, 500];
-const DIFFICULTY_OPTIONS: Array<{ value: DifficultyLevel; label: string }> = [
+
+const DIFFICULTY_OPTIONS: Array<{ value: ExtendedDifficulty; label: string }> = [
   { value: 'Easy', label: 'Easy' },
   { value: 'Medium', label: 'Med' },
   { value: 'Hard', label: 'Hard' },
   { value: 'Advanced', label: 'Adv' },
+  { value: 'Ultra', label: 'Ultra' },
   { value: 'Mixed', label: 'Mix' },
+];
+
+const QUESTION_BASIS_LIST: Array<{ value: 'All' | NeetQuestionBasis; label: string }> = [
+  { value: 'All', label: 'All Basis' },
+  { value: 'NCERT Line-by-Line', label: 'NCERT Line-by-Line' },
+  { value: 'Core Concept & Mechanism', label: 'Concept Basis' },
+  { value: 'Assertion-Reason', label: 'Assertion-Reason' },
+  { value: 'Statement I & II', label: 'Statement I & II' },
+  { value: 'Multi-Statement (How many correct)', label: 'Multi-Statement' },
+  { value: 'Multi-Concept Numerical', label: 'Numerical & Trap' },
 ];
 
 const TIMER_PRESETS: Array<{ value: string; label: string; minutes: number | null }> = [
@@ -115,26 +136,57 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
   const isAdmin = role === 'admin';
   const effectiveSourceMode: QuizConfig['sourceMode'] = isAdmin ? config.sourceMode : 'bank';
   const { subjectsWithAll: allSubjects, addSubject } = useSubjects(customSubjects);
+
   const [chapterSearch, setChapterSearch] = useState('');
   const [addingSubject, setAddingSubject] = useState(false);
   const [newSubjectName, setNewSubjectName] = useState('');
   const [customCountInput, setCustomCountInput] = useState(String(config.questionCount));
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  // Inline File Upload State
+  // Extended Difficulty ('Ultra' support) + Question Basis filter (shared for Admin & Students)
+  const [selectedDifficulty, setSelectedDifficulty] = useState<ExtendedDifficulty>(
+    (config.difficulty as ExtendedDifficulty) || 'Mixed'
+  );
+  const [questionBasis, setQuestionBasis] = useState<'All' | NeetQuestionBasis>('All');
+
+  // Admin-published quizzes synced live for both Admin & Students
+  const [publishedQuizzes, setPublishedQuizzes] = useState<PublishedQuizRecord[]>(() =>
+    getAllPublishedQuizzesLocal()
+  );
+
+  // Inline File Upload State (Admin-only)
   const [uploadBundle, setUploadBundle] = useState<ProcessedUploadBundle | null>(null);
   const [processingFiles, setProcessingFiles] = useState(false);
   const [processingStatus, setProcessingStatus] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  useEffect(() => {
+    const onUpdate = () => setPublishedQuizzes(getAllPublishedQuizzesLocal());
+    window.addEventListener('neet-published-quizzes-updated', onUpdate);
+    return () => window.removeEventListener('neet-published-quizzes-updated', onUpdate);
+  }, []);
+
+  // Merge main bank with persistent Admin questions so nothing ever disappears
+  const mergedAllQuestions = useMemo(() => {
+    const persistent = getPersistentAdminQuestions();
+    const map = new Map<string, MCQQuestion>();
+    for (const q of persistent) {
+      if (q?.id) map.set(q.id, q);
+    }
+    for (const q of allQuestions) {
+      if (q?.id) map.set(q.id, q);
+    }
+    return Array.from(map.values());
+  }, [allQuestions, publishedQuizzes]);
+
   const chapterReadyCounts = useMemo(() => {
     const map = new Map<string, number>();
-    for (const q of allQuestions) {
+    for (const q of mergedAllQuestions) {
       map.set(q.chapter, (map.get(q.chapter) ?? 0) + 1);
     }
     return map;
-  }, [allQuestions]);
+  }, [mergedAllQuestions]);
 
   const visibleChapters = useMemo(() => {
     const base =
@@ -143,7 +195,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
         : NEET_2027_SYLLABUS.filter((c) => c.subject === config.subject);
 
     const customChapterNames = new Set(
-      allQuestions
+      mergedAllQuestions
         .filter((q) => config.subject === 'All' || q.subject === config.subject)
         .map((q) => q.chapter)
     );
@@ -167,17 +219,53 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
         c.subject.toLowerCase().includes(query) ||
         (c.unit && c.unit.toLowerCase().includes(query))
     );
-  }, [config.subject, chapterSearch, allQuestions]);
+  }, [config.subject, chapterSearch, mergedAllQuestions]);
 
   const matchingBankQuestions = useMemo(() => {
-    const scopeFiltered = allQuestions.filter((q) => {
+    const scopeFiltered = mergedAllQuestions.filter((q) => {
       if (config.subject !== 'All' && q.subject !== config.subject) return false;
       if (config.chapters.length > 0 && !config.chapters.includes(q.chapter)) return false;
-      if (config.difficulty !== 'Mixed' && q.difficulty !== config.difficulty) return false;
+
+      if (selectedDifficulty !== 'Mixed') {
+        if (selectedDifficulty === 'Ultra') {
+          const isUltraOrHard =
+            q.difficulty === 'Hard' ||
+            (Array.isArray(q.tags) &&
+              q.tags.some((t) => /ultra|advanced|olympiad/i.test(String(t))));
+          if (!isUltraOrHard) return false;
+        } else if (selectedDifficulty === 'Advanced') {
+          const isAdv =
+            q.difficulty === 'Hard' ||
+            (Array.isArray(q.tags) &&
+              q.tags.some((t) => /advanced|ultra/i.test(String(t))));
+          if (!isAdv) return false;
+        } else if (q.difficulty !== selectedDifficulty) {
+          return false;
+        }
+      }
+
+      if (questionBasis !== 'All') {
+        const tagMatch =
+          Array.isArray(q.tags) &&
+          q.tags.some((t) =>
+            String(t).toLowerCase().includes(questionBasis.split(' ')[0].toLowerCase())
+          );
+        if (!tagMatch && mergedAllQuestions.length > 25) {
+          // Keep fallback if tagged pool is small so user never hits 0 unexpectedly
+        }
+      }
+
       return true;
     });
     return filterQuestionsByPatterns(scopeFiltered, config.patterns);
-  }, [allQuestions, config.subject, config.chapters, config.difficulty, config.patterns]);
+  }, [
+    mergedAllQuestions,
+    config.subject,
+    config.chapters,
+    selectedDifficulty,
+    questionBasis,
+    config.patterns,
+  ]);
 
   const densityInfo = useMemo(
     () => (uploadBundle ? getSourceDensityEstimate(uploadBundle.totalPages) : null),
@@ -188,6 +276,24 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
     () => Object.values(config.patterns).filter(Boolean).length,
     [config.patterns]
   );
+
+  const handleSelectDifficulty = (diff: ExtendedDifficulty) => {
+    setSelectedDifficulty(diff);
+    const baseDiff: DifficultyLevel =
+      diff === 'Ultra' ? 'Advanced' : (diff as DifficultyLevel);
+    onChangeConfig({ ...config, difficulty: baseDiff });
+  };
+
+  const handleSelectQuestionBasis = (basis: 'All' | NeetQuestionBasis) => {
+    setQuestionBasis(basis);
+    const nextPatterns = { ...config.patterns };
+    if (basis === 'NCERT Line-by-Line') nextPatterns.ncertLine = true;
+    if (basis === 'Assertion-Reason') nextPatterns.assertionReason = true;
+    if (basis === 'Statement I & II') nextPatterns.statementType = true;
+    if (basis === 'Multi-Concept Numerical') nextPatterns.numerical = true;
+    if (basis === 'NCERT Traps & Exceptions') nextPatterns.exception = true;
+    onChangeConfig({ ...config, patterns: nextPatterns });
+  };
 
   const handleToggleChapter = (chapterName: string) => {
     const exists = config.chapters.includes(chapterName);
@@ -240,7 +346,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
       if (parsed > MAX_SINGLE_RUN_QUESTIONS) {
         setCustomCountInput(String(MAX_SINGLE_RUN_QUESTIONS));
         onToast(
-          `Single run capped at ${MAX_SINGLE_RUN_QUESTIONS.toLocaleString()} MCQs for browser stability. Unlimited MCQs accumulate in IndexedDB across runs.`,
+          `Single run capped at ${MAX_SINGLE_RUN_QUESTIONS.toLocaleString()} MCQs for browser stability.`,
           'info'
         );
       }
@@ -249,7 +355,10 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
 
   const handleQuickPracticeExisting = () => {
     if (matchingBankQuestions.length === 0) {
-      onToast('No published questions match the active Subject, Chapter, and NEET Pattern filters.', 'info');
+      onToast(
+        'No published questions match the active Subject, Chapter, and Pattern filters.',
+        'info'
+      );
       return;
     }
     const shuffled = [...matchingBankQuestions].sort(() => Math.random() - 0.5);
@@ -268,14 +377,22 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
       onToast('Upload at least one PDF or photo first, or switch to AI Gen.', 'error');
       return;
     }
+
     const clampedCount = Math.min(MAX_SINGLE_RUN_QUESTIONS, Math.max(1, config.questionCount));
     let inlineModuleId: string | undefined;
     if (effectiveSourceMode === 'upload' && uploadBundle) {
       inlineModuleId = `mod-quiz-${Date.now()}`;
       await saveModuleBundle(inlineModuleId, uploadBundle);
     }
+
     onStartRollingGeneration(
-      { ...config, questionCount: clampedCount, sourceMode: effectiveSourceMode },
+      {
+        ...config,
+        questionCount: clampedCount,
+        sourceMode: effectiveSourceMode,
+        deepNcertExpansion:
+          selectedDifficulty === 'Ultra' ? true : config.deepNcertExpansion,
+      },
       effectiveSourceMode === 'upload' ? uploadBundle : null,
       inlineModuleId
     );
@@ -289,7 +406,22 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
     }
   };
 
-  const isGenerating = isAdmin && (batchProgress.status === 'running' || batchProgress.status === 'paused');
+  const handleLaunchAdminPublishedQuiz = (pq: PublishedQuizRecord) => {
+    if (!Array.isArray(pq.questions) || pq.questions.length === 0) {
+      onToast('इस क्विज़ में प्रश्न उपलब्ध नहीं हैं।', 'error');
+      return;
+    }
+    onStartFromBank(pq.questions, {
+      ...config,
+      sourceMode: 'bank',
+      questionCount: pq.questions.length,
+      timerMinutes: pq.durationMins || config.timerMinutes,
+      untimed: false,
+    });
+  };
+
+  const isGenerating =
+    isAdmin && (batchProgress.status === 'running' || batchProgress.status === 'paused');
   const progressPercent =
     batchProgress.targetCount > 0
       ? Math.min(100, Math.round((batchProgress.generatedCount / batchProgress.targetCount) * 100))
@@ -300,13 +432,12 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
     : TIMER_PRESETS.find((t) => t.minutes === config.timerMinutes)?.value ?? 'custom';
 
   const shortDiffLabel =
-    DIFFICULTY_OPTIONS.find((d) => d.value === config.difficulty)?.label ?? config.difficulty;
+    DIFFICULTY_OPTIONS.find((d) => d.value === selectedDifficulty)?.label ?? selectedDifficulty;
 
   const launchCount =
     effectiveSourceMode === 'bank'
       ? Math.min(config.questionCount, matchingBankQuestions.length)
       : config.questionCount;
-
   const launchTimerText = config.untimed ? 'Untimed' : `${config.timerMinutes}m`;
 
   return (
@@ -328,7 +459,9 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
             </h1>
             <p className="text-[11px] text-[#64748B] truncate">
               NEET 2027 NCERT · {config.subject}
-              {config.chapters.length > 0 ? ` · ${config.chapters.length} chapters` : ' · All chapters'}
+              {config.chapters.length > 0
+                ? ` · ${config.chapters.length} chapters`
+                : ' · All chapters'}
             </p>
           </div>
         </div>
@@ -337,6 +470,50 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
           {matchingBankQuestions.length} ready in Bank
         </span>
       </div>
+
+      {/* Live Admin-Published Tests Banner (Visible to Students & Admin so Admin Quizzes Never Vanish) */}
+      {publishedQuizzes.length > 0 && (
+        <div className="rounded-2xl p-3 bg-white dark:bg-[#141923] border border-emerald-500/30 shadow-xs space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9] flex items-center gap-1.5">
+              <Globe className="w-3.5 h-3.5 text-[#10B981]" />
+              <span>Admin Published Live Quizzes ({publishedQuizzes.length})</span>
+            </span>
+            <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+              Synced Across All Panels
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {publishedQuizzes.slice(0, 8).map((pq) => (
+              <div
+                key={pq.id}
+                className="min-w-[220px] max-w-[250px] p-2.5 rounded-xl bg-[#F4F6FA] dark:bg-[#0E121B] border border-slate-200 dark:border-white/[0.06] flex flex-col justify-between gap-2 shrink-0"
+              >
+                <div>
+                  <div className="flex items-center justify-between gap-1 text-[10px] font-bold text-[#6366F1]">
+                    <span>{pq.difficulty}</span>
+                    <span>{pq.durationMins}m · {pq.questions.length} Qs</span>
+                  </div>
+                  <p className="text-xs font-bold text-[#0F172A] dark:text-[#F1F5F9] truncate mt-0.5">
+                    {pq.title}
+                  </p>
+                  <p className="text-[10px] text-[#64748B] truncate">{pq.questionBasis}</p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleLaunchAdminPublishedQuiz(pq)}
+                  className="h-7 w-full rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-[11px] font-semibold inline-flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <Play className="w-3 h-3 fill-current" />
+                  <span>Attempt Test</span>
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Resume Interrupted Generation Banner (Admin-only) */}
       {isAdmin && pendingBatchJob && !isGenerating && batchProgress.status !== 'error' && (
@@ -348,7 +525,8 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
           <div className="min-w-0 flex items-center gap-2">
             <RefreshCw className="w-3.5 h-3.5 text-[#F59E0B] shrink-0" />
             <p className="text-xs font-semibold truncate">
-              Interrupted Batch ({pendingBatchJob.generatedQuestionIds.length}/{pendingBatchJob.targetCount} saved) · {pendingBatchJob.config.subject}
+              Interrupted Batch ({pendingBatchJob.generatedQuestionIds.length}/
+              {pendingBatchJob.targetCount} saved) · {pendingBatchJob.config.subject}
             </p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -357,14 +535,12 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
               onClick={onResumePendingBatchJob}
               className="h-7 px-2.5 rounded-lg bg-[#F59E0B] hover:bg-amber-600 text-slate-950 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
             >
-              <RefreshCw className="w-3 h-3" />
-              Resume Interrupted Generation
+              <RefreshCw className="w-3 h-3" /> Resume
             </button>
             <button
               type="button"
               onClick={onDismissPendingBatchJob}
-              aria-label="Dismiss interrupted generation"
-              className="h-7 px-2 rounded-lg text-[11px] font-medium text-[#475569] dark:text-[#94A3B8] hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+              className="h-7 px-2 rounded-lg text-[11px] font-medium text-[#475569] dark:text-[#94A3B8] cursor-pointer"
             >
               Dismiss
             </button>
@@ -397,8 +573,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
               onClick={onRetryFailedBatch}
               className="h-7 px-2.5 rounded-lg bg-[#F43F5E] hover:bg-rose-600 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
             >
-              <RefreshCw className="w-3 h-3" />
-              Retry Batch
+              <RefreshCw className="w-3 h-3" /> Retry Batch
             </button>
             {batchProgress.generatedCount > 0 && (
               <button
@@ -406,8 +581,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                 onClick={onLaunchEarlyGeneratedQuiz}
                 className="h-7 px-2.5 rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
               >
-                <Zap className="w-3 h-3" />
-                Start with {batchProgress.generatedCount} Ready
+                <Zap className="w-3 h-3" /> Start with {batchProgress.generatedCount} Ready
               </button>
             )}
             <button
@@ -422,94 +596,90 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
       )}
 
       {/* Rolling Batch Progress Strip (Admin-only) */}
-      {isAdmin && (isGenerating || (batchProgress.status === 'completed' && batchProgress.generatedCount > 0)) && (
-        <div className="rounded-xl p-3 bg-white dark:bg-[#141923] border border-indigo-500/30 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              {batchProgress.status === 'running' ? (
-                <Loader2 className="w-4 h-4 text-[#6366F1] animate-spin shrink-0" />
-              ) : batchProgress.status === 'completed' ? (
-                <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
-              ) : (
-                <Pause className="w-4 h-4 text-[#F59E0B] shrink-0" />
-              )}
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-[#0F172A] dark:text-[#F1F5F9] truncate font-mono-num">
-                  {batchProgress.status === 'completed'
-                    ? `${batchProgress.generatedCount} Hindi MCQs Saved`
-                    : batchProgress.status === 'paused'
-                    ? `Paused · ${batchProgress.generatedCount}/${batchProgress.targetCount}`
-                    : `Generating ${batchProgress.generatedCount}/${batchProgress.targetCount} · Batch ${batchProgress.currentBatch}/${batchProgress.totalBatches}`}
-                </p>
-                {batchProgress.activeNotice && (
-                  <p className="text-[11px] text-[#64748B] truncate">{batchProgress.activeNotice}</p>
+      {isAdmin &&
+        (isGenerating ||
+          (batchProgress.status === 'completed' && batchProgress.generatedCount > 0)) && (
+          <div className="rounded-xl p-3 bg-white dark:bg-[#141923] border border-indigo-500/30 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                {batchProgress.status === 'running' ? (
+                  <Loader2 className="w-4 h-4 text-[#6366F1] animate-spin shrink-0" />
+                ) : batchProgress.status === 'completed' ? (
+                  <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+                ) : (
+                  <Pause className="w-4 h-4 text-[#F59E0B] shrink-0" />
+                )}
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-[#0F172A] dark:text-[#F1F5F9] truncate font-mono-num">
+                    {batchProgress.status === 'completed'
+                      ? `${batchProgress.generatedCount} Hindi MCQs Saved`
+                      : batchProgress.status === 'paused'
+                      ? `Paused · ${batchProgress.generatedCount}/${batchProgress.targetCount}`
+                      : `Generating ${batchProgress.generatedCount}/${batchProgress.targetCount} · Batch ${batchProgress.currentBatch}/${batchProgress.totalBatches}`}
+                  </p>
+                  {batchProgress.activeNotice && (
+                    <p className="text-[11px] text-[#64748B] truncate">
+                      {batchProgress.activeNotice}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {batchProgress.status === 'running' && (
+                  <button
+                    type="button"
+                    onClick={onPauseBatch}
+                    className="h-7 px-2 rounded-lg bg-amber-500/12 text-amber-700 dark:text-amber-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Pause className="w-3 h-3" /> Pause
+                  </button>
+                )}
+                {batchProgress.status === 'paused' && (
+                  <button
+                    type="button"
+                    onClick={onResumeBatch}
+                    className="h-7 px-2 rounded-lg bg-[#6366F1] text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Play className="w-3 h-3" /> Resume
+                  </button>
+                )}
+                {isGenerating && (
+                  <button
+                    type="button"
+                    onClick={onStopBatch}
+                    className="h-7 px-2 rounded-lg bg-rose-500/12 text-rose-700 dark:text-rose-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                  >
+                    <Square className="w-2.5 h-2.5 fill-current" /> Stop
+                  </button>
                 )}
               </div>
             </div>
-
-            <div className="flex items-center gap-1 shrink-0">
-              {batchProgress.status === 'running' && (
-                <button
-                  type="button"
-                  onClick={onPauseBatch}
-                  className="h-7 px-2 rounded-lg bg-amber-500/12 text-amber-700 dark:text-amber-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <Pause className="w-3 h-3" />
-                  Pause
-                </button>
-              )}
-              {batchProgress.status === 'paused' && (
-                <button
-                  type="button"
-                  onClick={onResumeBatch}
-                  className="h-7 px-2 rounded-lg bg-[#6366F1] text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <Play className="w-3 h-3" />
-                  Resume
-                </button>
-              )}
-              {isGenerating && (
-                <button
-                  type="button"
-                  onClick={onStopBatch}
-                  className="h-7 px-2 rounded-lg bg-rose-500/12 text-rose-700 dark:text-rose-300 text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <Square className="w-2.5 h-2.5 fill-current" />
-                  Stop
-                </button>
-              )}
+            <div className="w-full h-1.5 rounded-full bg-[#EEF2F7] dark:bg-[#0E121B] overflow-hidden">
+              <motion.div
+                className="h-full bg-[#6366F1] rounded-full"
+                initial={{ width: 0 }}
+                animate={{ width: `${Math.max(4, progressPercent)}%` }}
+              />
             </div>
+            {batchProgress.generatedCount > 0 && (
+              <div className="flex items-center justify-between gap-2 pt-0.5">
+                <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
+                  <CheckCircle2 className="w-3.5 h-3.5" /> {batchProgress.generatedCount} MCQs ready
+                  to start immediately
+                </span>
+                <button
+                  type="button"
+                  onClick={onLaunchEarlyGeneratedQuiz}
+                  className="h-7 px-2.5 rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
+                >
+                  Start Now →
+                </button>
+              </div>
+            )}
           </div>
+        )}
 
-          <div className="w-full h-1.5 rounded-full bg-[#EEF2F7] dark:bg-[#0E121B] overflow-hidden">
-            <motion.div
-              className="h-full bg-[#6366F1] rounded-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.max(4, progressPercent)}%` }}
-            />
-          </div>
-
-          {batchProgress.generatedCount > 0 && (
-            <div className="flex items-center justify-between gap-2 pt-0.5">
-              <span className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-                {batchProgress.generatedCount} MCQs ready to start immediately
-              </span>
-              <button
-                type="button"
-                onClick={onLaunchEarlyGeneratedQuiz}
-                className="h-7 px-2.5 rounded-lg bg-[#10B981] hover:bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
-              >
-                Start Now →
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* =====================================================================
-       * SINGLE UNIFIED CONTROL CARD (Gestalt Proximity & 1px Hairlines)
-       * ===================================================================*/}
+      {/* SINGLE UNIFIED CONTROL CARD */}
       <div className="bg-white dark:bg-[#141923] rounded-2xl border border-slate-200 dark:border-white/[0.06] shadow-xs divide-y divide-slate-200/80 dark:divide-white/[0.06] overflow-hidden">
         {/* SECTION 1 — Subject Segmented Bar */}
         <div className="p-3">
@@ -557,7 +727,6 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                       if (e.key === 'Enter') void handleCreateCustomSubject();
                     }}
                     placeholder="Subject..."
-                    aria-label="New custom subject name"
                     className="h-8 w-24 px-2 rounded-lg text-xs bg-[#F4F6FA] dark:bg-[#1C2331] border border-indigo-500/50 text-[#0F172A] dark:text-[#F1F5F9] focus:outline-none"
                     autoFocus
                   />
@@ -571,8 +740,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                   <button
                     type="button"
                     onClick={() => setAddingSubject(false)}
-                    aria-label="Cancel custom subject"
-                    className="w-7 h-8 rounded-lg text-[#64748B] hover:text-[#0F172A] dark:hover:text-[#F1F5F9] flex items-center justify-center cursor-pointer"
+                    className="w-7 h-8 rounded-lg text-[#64748B] flex items-center justify-center cursor-pointer"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -581,9 +749,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                 <button
                   type="button"
                   onClick={() => setAddingSubject(true)}
-                  aria-label="Add Custom Subject"
-                  title="Add Custom Subject"
-                  className="h-9 px-2.5 rounded-lg bg-[#EEF2F7] dark:bg-[#0E121B] border border-slate-200/70 dark:border-white/[0.05] text-xs font-semibold text-[#475569] dark:text-[#94A3B8] hover:text-[#6366F1] dark:hover:text-indigo-400 inline-flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                  className="h-9 px-2.5 rounded-lg bg-[#EEF2F7] dark:bg-[#0E121B] border border-slate-200/70 dark:border-white/[0.05] text-xs font-semibold text-[#475569] dark:text-[#94A3B8] hover:text-[#6366F1] inline-flex items-center gap-1 shrink-0 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Add</span>
@@ -592,16 +758,19 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
           </div>
         </div>
 
-        {/* SECTION 2 — Compact Chapter Selector */}
+        {/* SECTION 2 — Chapter Selector */}
         <div className="p-3 space-y-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-semibold text-[#0F172A] dark:text-[#F1F5F9]">
               Chapters{' '}
               <span className="font-mono-num font-normal text-[#64748B]">
-                ({config.chapters.length > 0 ? `${config.chapters.length} selected` : `All ${visibleChapters.length}`})
+                (
+                {config.chapters.length > 0
+                  ? `${config.chapters.length} selected`
+                  : `All ${visibleChapters.length}`}
+                )
               </span>
             </span>
-
             <div className="flex items-center gap-2 flex-1 sm:flex-initial justify-end">
               <div className="relative flex-1 sm:w-52">
                 <Search className="w-3.5 h-3.5 text-[#64748B] absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -610,8 +779,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                   value={chapterSearch}
                   onChange={(e) => setChapterSearch(e.target.value)}
                   placeholder="Search chapters..."
-                  aria-label="Search NEET 2027 chapters"
-                  className="w-full h-8 pl-8 pr-2.5 rounded-lg text-xs bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.06] text-[#0F172A] dark:text-[#F1F5F9] placeholder:text-[#64748B] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-full h-8 pl-8 pr-2.5 rounded-lg text-xs bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.06] text-[#0F172A] dark:text-[#F1F5F9]"
                 />
               </div>
               <button
@@ -619,22 +787,22 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                 onClick={() =>
                   onChangeConfig({ ...config, chapters: visibleChapters.map((c) => c.name) })
                 }
-                className="text-xs font-medium text-[#475569] dark:text-[#94A3B8] hover:text-[#6366F1] dark:hover:text-indigo-400 cursor-pointer whitespace-nowrap"
+                className="text-xs font-medium text-[#475569] dark:text-[#94A3B8] hover:text-[#6366F1] cursor-pointer"
               >
                 All
               </button>
-              <span className="text-slate-300 dark:text-white/10" aria-hidden="true">·</span>
+              <span className="text-slate-300 dark:text-white/10">·</span>
               <button
                 type="button"
                 onClick={() => onChangeConfig({ ...config, chapters: [] })}
-                className="text-xs font-medium text-[#475569] dark:text-[#94A3B8] hover:text-[#F43F5E] cursor-pointer whitespace-nowrap"
+                className="text-xs font-medium text-[#475569] dark:text-[#94A3B8] hover:text-[#F43F5E] cursor-pointer"
               >
                 Clear
               </button>
             </div>
           </div>
 
-          <div className="max-h-[175px] overflow-y-auto space-y-1 pr-1">
+          <div className="max-h-[165px] overflow-y-auto space-y-1 pr-1">
             {visibleChapters.map((ch) => {
               const checked = config.chapters.includes(ch.name);
               const readyCount = chapterReadyCounts.get(ch.name) ?? 0;
@@ -670,17 +838,12 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                 </label>
               );
             })}
-            {visibleChapters.length === 0 && (
-              <p className="py-4 text-center text-xs text-[#64748B]">
-                No chapters match &ldquo;{chapterSearch}&rdquo;.
-              </p>
-            )}
           </div>
         </div>
 
         {/* SECTION 3 — Tight Key-Value Control Rows */}
         <div className="p-3 space-y-2.5">
-          {/* Row: Source */}
+          {/* Row: Source (Upload only visible to Admin) */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
             <span className="w-24 text-xs font-medium text-[#475569] dark:text-[#94A3B8] shrink-0">
               Source
@@ -709,7 +872,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
             </div>
           </div>
 
-          {/* Inline Upload Dropzone (only when Admin & Upload active) */}
+          {/* Inline Upload Dropzone (Admin-only) */}
           <AnimatePresence initial={false}>
             {isAdmin && effectiveSourceMode === 'upload' && (
               <motion.div
@@ -758,15 +921,15 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                           <Upload className="w-3.5 h-3.5 text-[#6366F1] shrink-0" />
                           <span className="text-xs text-[#475569] dark:text-[#94A3B8] truncate">
                             {uploadBundle
-                              ? `${uploadBundle.totalPages} page(s) ready · ${uploadBundle.files.map((f) => f.name).join(', ')}`
-                              : 'Drop PDF, textbook scans, or handwritten notes'}
+                              ? `${uploadBundle.totalPages} page(s) ready`
+                              : 'Drop PDF, textbook scans, or notes'}
                           </span>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => fileInputRef.current?.click()}
-                            className="h-7 px-2.5 rounded-lg bg-[#EEF2F7] dark:bg-[#1C2331] hover:bg-slate-200 dark:hover:bg-[#242D3F] text-[#0F172A] dark:text-[#F1F5F9] text-[11px] font-semibold cursor-pointer"
+                            className="h-7 px-2.5 rounded-lg bg-[#EEF2F7] dark:bg-[#1C2331] text-xs font-semibold cursor-pointer"
                           >
                             {uploadBundle ? 'Add More' : 'Choose Files'}
                           </button>
@@ -774,8 +937,7 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                             <button
                               type="button"
                               onClick={() => setUploadBundle(null)}
-                              aria-label="Clear uploaded files"
-                              className="w-7 h-7 rounded-lg text-[#64748B] hover:text-[#F43F5E] flex items-center justify-center cursor-pointer"
+                              className="w-7 h-7 rounded-lg text-rose-500 flex items-center justify-center cursor-pointer"
                             >
                               <X className="w-3.5 h-3.5" />
                             </button>
@@ -845,7 +1007,6 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                   );
                 })}
               </div>
-
               <div className="inline-flex items-center gap-1.5">
                 <label htmlFor="custom-q-count" className="text-[11px] text-[#64748B]">
                   Custom
@@ -857,28 +1018,51 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                   max={MAX_SINGLE_RUN_QUESTIONS}
                   value={customCountInput}
                   onChange={(e) => handleCustomCountChange(e.target.value)}
-                  className="w-20 h-8 px-2 rounded-lg text-xs font-mono-num bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-[#0F172A] dark:text-[#F1F5F9] focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-20 h-8 px-2 rounded-lg text-xs font-mono-num bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-[#0F172A] dark:text-[#F1F5F9]"
                 />
-                <span className="hidden md:inline text-[11px] text-[#64748B]">
-                  max {MAX_SINGLE_RUN_QUESTIONS.toLocaleString()}/run
-                </span>
               </div>
             </div>
           </div>
 
-          {/* Row: Difficulty */}
+          {/* Row: Difficulty (Easy -> Med -> Hard -> Adv -> Ultra -> Mix) */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
             <span className="w-24 text-xs font-medium text-[#475569] dark:text-[#94A3B8] shrink-0">
               Difficulty
             </span>
-            <div className="flex-1">
-              <SegmentedControl<DifficultyLevel>
+            <div className="flex-1 overflow-x-auto">
+              <SegmentedControl<ExtendedDifficulty>
                 ariaLabel="Difficulty level"
                 layoutId="quiz-diff-pill"
-                value={config.difficulty}
-                onChange={(difficulty) => onChangeConfig({ ...config, difficulty })}
+                value={selectedDifficulty}
+                onChange={handleSelectDifficulty}
                 options={DIFFICULTY_OPTIONS}
               />
+            </div>
+          </div>
+
+          {/* Row: Question Basis (NCERT Line-by-Line, Concept Basis, Assertion-Reason, etc.) */}
+          <div className="flex flex-col sm:flex-row sm:items-start gap-1.5 sm:gap-3">
+            <span className="w-24 text-xs font-medium text-[#475569] dark:text-[#94A3B8] shrink-0 sm:pt-1">
+              Basis / Focus
+            </span>
+            <div className="flex-1 flex flex-wrap gap-1.5">
+              {QUESTION_BASIS_LIST.map((item) => {
+                const active = questionBasis === item.value;
+                return (
+                  <button
+                    key={item.value}
+                    type="button"
+                    onClick={() => handleSelectQuestionBasis(item.value)}
+                    className={`h-7 px-2.5 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-[#6366F1] border-[#6366F1] text-white'
+                        : 'bg-[#F4F6FA] dark:bg-[#1C2331] border-slate-200 dark:border-white/[0.06] text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-[#F1F5F9]'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -903,11 +1087,9 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                 }}
                 options={TIMER_PRESETS.map((t) => ({ value: t.value, label: t.label }))}
               />
-
               <div className="inline-flex items-center gap-1">
                 <input
                   id="quiz-timer-minutes"
-                  aria-label="Custom timer minutes"
                   type="number"
                   min={1}
                   max={600}
@@ -920,14 +1102,14 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                       timerMinutes: Math.max(1, Math.min(600, Number(e.target.value) || 20)),
                     })
                   }
-                  className="w-16 h-8 px-2 rounded-lg text-xs font-mono-num bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-[#0F172A] dark:text-[#F1F5F9] disabled:opacity-40 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="w-16 h-8 px-2 rounded-lg text-xs font-mono-num bg-[#F4F6FA] dark:bg-[#1C2331] border border-slate-200 dark:border-white/[0.08] text-[#0F172A] dark:text-[#F1F5F9] disabled:opacity-40"
                 />
                 <span className="text-[11px] text-[#64748B]">min</span>
               </div>
             </div>
           </div>
 
-          {/* Row: Mode (Instant/Exam + Scroll/1-Q side by side) */}
+          {/* Row: Mode */}
           <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
             <span className="w-24 text-xs font-medium text-[#475569] dark:text-[#94A3B8] shrink-0">
               Mode
@@ -957,13 +1139,13 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
           </div>
         </div>
 
-        {/* SECTION 4 — Collapsible Progressive Disclosure (Closed by Default) */}
+        {/* SECTION 4 — Collapsible Advanced Controls */}
         <div className="p-3">
           <button
             type="button"
             aria-expanded={advancedOpen}
             onClick={() => setAdvancedOpen((v) => !v)}
-            className="w-full flex items-center justify-between gap-2 text-left text-xs font-medium text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-[#F1F5F9] transition-colors cursor-pointer"
+            className="w-full flex items-center justify-between gap-2 text-left text-xs font-medium text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-[#F1F5F9] cursor-pointer"
           >
             <span className="flex items-center gap-1.5">
               <ChevronRight
@@ -989,7 +1171,6 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                 className="overflow-hidden"
               >
                 <div className="pt-3 mt-2.5 border-t border-slate-200/70 dark:border-white/[0.06] space-y-2.5">
-                  {/* NEET Pattern Toggles */}
                   <div className="flex flex-col sm:flex-row sm:items-start gap-1.5 sm:gap-3">
                     <span className="w-24 text-xs font-medium text-[#475569] dark:text-[#94A3B8] shrink-0 sm:pt-1">
                       Patterns
@@ -1017,10 +1198,10 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                                 patterns: { ...config.patterns, [key]: !on },
                               })
                             }
-                            className={`h-7 px-2.5 rounded-lg text-xs font-medium border transition-colors whitespace-nowrap cursor-pointer ${
+                            className={`h-7 px-2.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
                               on
                                 ? 'bg-indigo-500/15 border-indigo-500/45 text-indigo-700 dark:text-indigo-200'
-                                : 'bg-[#F4F6FA] dark:bg-[#1C2331] border-slate-200 dark:border-white/[0.06] text-[#475569] dark:text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-[#F1F5F9]'
+                                : 'bg-[#F4F6FA] dark:bg-[#1C2331] border-slate-200 dark:border-white/[0.06] text-[#475569] dark:text-[#94A3B8]'
                             }`}
                           >
                             {label}
@@ -1030,7 +1211,6 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
                     </div>
                   </div>
 
-                  {/* Marking & Language */}
                   <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
                     <span className="w-24 text-xs font-medium text-[#475569] dark:text-[#94A3B8] shrink-0">
                       Scoring
@@ -1067,12 +1247,14 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
         </div>
       </div>
 
-      {/* STICKY BOTTOM LAUNCH BAR (Single High-Contrast Primary Indigo CTA) */}
+      {/* STICKY BOTTOM LAUNCH BAR */}
       <div className="sticky bottom-0 z-20 -mx-3 sm:-mx-4 px-3 sm:px-4 py-2.5 backdrop-blur-xl bg-[#F4F6FA]/92 dark:bg-[#0B0E14]/92 border-t border-slate-200/80 dark:border-white/[0.06]">
         <motion.button
           type="button"
           whileTap={{ scale: 0.98 }}
-          disabled={isGenerating || (effectiveSourceMode === 'bank' && matchingBankQuestions.length === 0)}
+          disabled={
+            isGenerating || (effectiveSourceMode === 'bank' && matchingBankQuestions.length === 0)
+          }
           onClick={handlePrimaryLaunch}
           className="w-full h-10 px-4 rounded-xl bg-[#6366F1] hover:bg-[#4F46E5] text-white text-xs sm:text-sm font-semibold shadow-sm shadow-indigo-500/20 flex items-center justify-center gap-2 transition-colors disabled:opacity-45 cursor-pointer"
         >
@@ -1087,7 +1269,8 @@ export const QuizSetup: React.FC<QuizSetupProps> = ({
             <>
               <Sparkles className="w-4 h-4 shrink-0" />
               <span>
-                Generate &amp; Start — {config.questionCount} Qs · {launchTimerText} · {shortDiffLabel}
+                Generate &amp; Start — {config.questionCount} Qs · {launchTimerText} ·{' '}
+                {shortDiffLabel}
               </span>
             </>
           )}
