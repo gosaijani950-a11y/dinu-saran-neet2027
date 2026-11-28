@@ -65,7 +65,6 @@ export function validateAccessKeyFormat(rawKey: string): string | null {
   return null;
 }
 
-/** Auto-syncs current browser's student profile to Supabase so Admin always sees all users */
 export async function syncLocalStudentProfileToCloud(settings: AppSettings): Promise<void> {
   const client = getSupabaseClient(settings);
   if (!client) return;
@@ -218,46 +217,53 @@ export async function fetchRegisteredUsersList(
 
   const mergedMap = new Map<string, RegisteredStudentRow>();
 
-  const normalizeRow = (row: any, idx: number, prefix: string): RegisteredStudentRow => ({
-    id: String(row.id || `${prefix}-${row.username || idx}`),
-    username: String(row.username || row.student_name || 'Unknown'),
-    full_name: String(row.full_name || row.name || row.username || ''),
-    mobile: String(row.mobile || row.phone || ''),
-    secret_code: String(row.secret_code || row.secretCode || '—'),
-    security_code: String(row.security_code || row.securityCode || '—'),
-    target_year: String(row.target_year || '2027'),
-    created_at: row.created_at || row.last_active_at,
-  });
+  const normalizeRow = (row: any, idx: number, prefix: string): RegisteredStudentRow => {
+    const rawUser = String(row.username || row.student_name || row.full_name || 'Unknown').trim();
+    const cleanUser = rawUser.startsWith('@') ? rawUser.slice(1) : rawUser;
+    return {
+      id: String(row.id || `${prefix}-${cleanUser}-${idx}`),
+      username: cleanUser,
+      full_name: String(row.full_name || row.name || cleanUser),
+      mobile: String(row.mobile || row.phone || ''),
+      secret_code: String(row.secret_code || row.secretCode || '—'),
+      security_code: String(row.security_code || row.securityCode || '—'),
+      target_year: String(row.target_year || '2027'),
+      created_at: row.updated_at || row.created_at || row.last_active_at,
+    };
+  };
 
-  // 1. Read from app_registered_users (multi-browser cloud sync table)
-  try {
-    const { data: regData } = await client
-      .from('app_registered_users')
-      .select('*')
-      .order('last_active_at', { ascending: false });
-    if (Array.isArray(regData)) {
-      regData.forEach((row: any, idx: number) => {
-        const norm = normalizeRow(row, idx, 'reg');
-        const key = `${norm.username.toLowerCase()}_${norm.mobile}`;
-        mergedMap.set(key, norm);
-      });
+  // Read from all 4 possible student tables in priority order (students & student_registry first!)
+  const tablesToCheck = ['students', 'student_registry', 'app_registered_users', 'student_profiles'];
+  for (const tbl of tablesToCheck) {
+    try {
+      const { data: rows, error } = await client.from(tbl).select('*');
+      if (!error && Array.isArray(rows)) {
+        rows.forEach((row: any, idx: number) => {
+          const norm = normalizeRow(row, idx, tbl);
+          const key = `${norm.username.toLowerCase()}_${norm.mobile}`;
+          const existing = mergedMap.get(key);
+          if (!existing) {
+            mergedMap.set(key, norm);
+          } else {
+            mergedMap.set(key, {
+              ...existing,
+              full_name: norm.full_name || existing.full_name,
+              secret_code:
+                norm.secret_code && norm.secret_code !== '—'
+                  ? norm.secret_code
+                  : existing.secret_code,
+              security_code:
+                norm.security_code && norm.security_code !== '—'
+                  ? norm.security_code
+                  : existing.security_code,
+            });
+          }
+        });
+      }
+    } catch {
+      // Skip if table doesn't exist
     }
-  } catch {}
-
-  // 2. Also merge from student_profiles if present
-  try {
-    const { data: profData } = await client
-      .from('student_profiles')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (Array.isArray(profData)) {
-      profData.forEach((row: any, idx: number) => {
-        const norm = normalizeRow(row, idx, 'prof');
-        const key = `${norm.username.toLowerCase()}_${norm.mobile}`;
-        if (!mergedMap.has(key)) mergedMap.set(key, norm);
-      });
-    }
-  } catch {}
+  }
 
   return Array.from(mergedMap.values());
 }
