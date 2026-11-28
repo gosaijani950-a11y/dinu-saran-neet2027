@@ -98,7 +98,6 @@ import { SecretVaultModal } from './components/SecretVaultModal';
 import { StudentProfileModal } from './components/StudentProfileModal';
 import { NeetCountdownAndFreezeBar, SmartRevisionAndOmrWidget } from './components/NeetAdvancedTools';
 import { AiQuizStudioModal } from './components/AiQuizStudioModal';
-import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels } from './services/dinuMentorService';
 import { getPersistentAdminQuestions, syncCloudQuestionsToAllPanels, deduplicateQuestionsList, buildDeterministicQuestionId } from './services/dinuMentorService';
 
 
@@ -832,31 +831,109 @@ const [globalStreak, setGlobalStreak] = useState<number>(() => {
     showToast('Unfinished quiz checkpoint discarded.', 'info');
   }, [showToast]);
 
-  const handleSubmitQuiz = useCallback(
+    const handleSubmitQuiz = useCallback(
     async (answers: Record<string, number>, submissionType: 'manual' | 'auto') => {
-      const qs = activeQuizQuestions;
-      const summary = evaluateQuizPerformance({
-        id: `res-${Date.now()}`,
-        config: activeQuizConfig,
-        questions: qs,
-        answers,
-        submissionType,
-      });
+      try {
+        const rawQs =
+          activeQuizQuestions.length > 0
+            ? activeQuizQuestions
+            : activeQuizQuestionsOverride || [];
 
-      await db.quizHistory.put(summary);
-      await recordQuizMistakes(qs, answers);
-      await db.quizCheckpoints.delete('active');
-      setCheckpoint(null);
-      await refreshAllData();
-void studentFeatures.recordQuizInLeaderboard(summary);
+        if (rawQs.length === 0) {
+          showToast('सबमिट करने के लिए कोई सक्रिय प्रश्न नहीं मिला।', 'error');
+          return;
+        }
 
-      setLatestResult(summary);
-      setLatestResultQuestions(qs);
-      setRoute('quiz-result');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+        const safeQs: MCQQuestion[] = rawQs.map((q: any, idx: number) => ({
+          ...q,
+          id: String(q?.id || `sub_q_${Date.now()}_${idx}`),
+          subject:
+            q?.subject === 'Physics' ||
+            q?.subject === 'Chemistry' ||
+            q?.subject === 'Botany' ||
+            q?.subject === 'Zoology'
+              ? q.subject
+              : 'Botany',
+          chapter: String(q?.chapter || 'NCERT Practice'),
+          topic: String(q?.topic || q?.chapter || 'General'),
+          difficulty:
+            q?.difficulty === 'Easy' ||
+            q?.difficulty === 'Medium' ||
+            q?.difficulty === 'Hard'
+              ? q.difficulty
+              : 'Medium',
+          question_hi: String(q?.question_hi || q?.question_en || `प्रश्न ${idx + 1}`),
+          question_en: String(q?.question_en || q?.question_hi || `Question ${idx + 1}`),
+          options_hi:
+            Array.isArray(q?.options_hi) && q.options_hi.length === 4
+              ? q.options_hi.map((o: any) => String(o ?? ''))
+              : ['विकल्प A', 'विकल्प B', 'विकल्प C', 'विकल्प D'],
+          options_en:
+            Array.isArray(q?.options_en) && q.options_en.length === 4
+              ? q.options_en.map((o: any) => String(o ?? ''))
+              : ['Option A', 'Option B', 'Option C', 'Option D'],
+          correctIndex:
+            typeof q?.correctIndex === 'number' && q.correctIndex >= 0 && q.correctIndex <= 3
+              ? q.correctIndex
+              : typeof q?.correct_index === 'number' &&
+                q.correct_index >= 0 &&
+                q.correct_index <= 3
+              ? q.correct_index
+              : 0,
+          explanation_hi: String(q?.explanation_hi || 'NCERT के अनुसार सही उत्तर देखें।'),
+          explanation_en: String(q?.explanation_en || 'Check the correct NCERT explanation.'),
+          isStarred: Boolean(q?.isStarred),
+          isSaved: Boolean(q?.isSaved),
+          createdAt: typeof q?.createdAt === 'number' ? q.createdAt : Date.now(),
+        }));
+
+        const summary = evaluateQuizPerformance({
+          id: `res-${Date.now()}`,
+          config: activeQuizConfig,
+          questions: safeQs,
+          answers: answers || {},
+          submissionType,
+        });
+
+        setLatestResult(summary);
+        setLatestResultQuestions(safeQs);
+        setRoute('quiz-result');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+
+        void (async () => {
+          try {
+            await db.quizHistory.put(summary);
+          } catch {}
+          try {
+            await recordQuizMistakes(safeQs, answers || {});
+          } catch {}
+          try {
+            await db.quizCheckpoints.delete('active');
+            setCheckpoint(null);
+          } catch {}
+          try {
+            await refreshAllData();
+          } catch {}
+          try {
+            void studentFeatures.recordQuizInLeaderboard(summary);
+          } catch {}
+        })();
+      } catch (err) {
+        console.error('Submit quiz crash prevented:', err);
+        showToast('परिणाम तैयार करने में त्रुटि आई, कृपया पुनः सबमिट दबाएं।', 'error');
+      }
     },
-    [activeQuizQuestions, activeQuizConfig, refreshAllData]
+    [
+      activeQuizQuestions,
+      activeQuizQuestionsOverride,
+      activeQuizConfig,
+      refreshAllData,
+      showToast,
+      studentFeatures,
+    ]
   );
+
+  
 
   const handleReattemptLatest = useCallback(() => {
     if (!latestResult || latestResultQuestions.length === 0) return;
