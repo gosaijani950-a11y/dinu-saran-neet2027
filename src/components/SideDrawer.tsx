@@ -48,6 +48,7 @@ interface SideDrawerProps {
   onUpdateCreatorName: (name: string) => void;
   onAdjustFont: (delta: number) => void;
     onOpenProfile: () => void;
+  onOpenCommandCenter?: () => void;
 }
 
 export const SideDrawer: React.FC<SideDrawerProps> = ({
@@ -70,7 +71,7 @@ export const SideDrawer: React.FC<SideDrawerProps> = ({
   onUpdateCreatorName,
   onAdjustFont,
   onOpenProfile,
-
+onOpenCommandCenter,
 }) => {
   const isAdmin = role === 'admin';
   const [editingName, setEditingName] = useState(false);
@@ -123,6 +124,15 @@ export const SideDrawer: React.FC<SideDrawerProps> = ({
     },
     ...(isAdmin
       ? [
+               {
+         label: '🛡️ Admin Page (Command Center)',
+         action: () => {
+           onClose();
+           onOpenCommandCenter?.();
+         },
+         icon: <ShieldCheck className="w-4 h-4 text-emerald-500" />,
+       },
+
           {
             label: 'Reported Questions',
             route: 'reports' as ViewRoute,
