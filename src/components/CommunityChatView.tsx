@@ -38,6 +38,7 @@ import {
   formatNeetExamText,
   HINDI_NEET_PYQ_BANK,
 } from '../utils/neetEngine';
+import { getStoredApiKey } from '../services/dinuMentorService';
 
 export interface PollData {
   question: string;
@@ -1083,118 +1084,176 @@ const CommunityChatInner: React.FC<CommunityChatViewProps> = ({
     latestPrompt: string,
     triggerMsg: CommunityMessage
   ) => {
-    if (!supabase) return;
-    const envKey = (import.meta as { env?: Record<string, string> }).env?.VITE_GEMINI_API_KEY?.trim();
-    const activeKey = settings.apiKey?.trim() || settings.backupApiKey?.trim() || envKey;
-    if (!activeKey) return;
-
     setAiThinking(true);
     try {
-      const recentChat = historySnapshot
-        .slice(-25)
-        .map((m) => {
-          const replyNote = m.reply_to_name
-            ? ` (replying to ${m.reply_to_name}: "${m.reply_to_text}")`
-            : '';
-          const imgNote = m.image_data ? ' [Attached Image]' : '';
-          return `[${m.subject || 'General'}] ${m.is_ai ? 'DINU AI' : m.student_name}${replyNote}${imgNote}: ${m.message}`;
-        })
-        .join('\n');
+      const envKey = (import.meta as { env?: Record<string, string> }).env?.VITE_GEMINI_API_KEY?.trim();
+      const activeKey =
+        settings.apiKey?.trim() ||
+        settings.backupApiKey?.trim() ||
+        envKey ||
+        getStoredApiKey();
 
-      const model = settings.modelId || 'gemini-2.5-flash';
-      const systemInstruction =
-        'You are DINU AI, the smart NEET UG mentor inside Dinu Saran NEET 2027 Student Community Chat. ' +
-        'You have read the recent group conversation and any attached doubt image. ' +
-        'Reply ONLY because a student tagged @dinu. Give a complete, detailed, step-by-step NCERT-accurate answer in pure Hindi medium (with famous English scientific terms in brackets) without cutting off.';
+      let replyText = '';
 
-      const replyContext = triggerMsg.reply_to_name
-        ? `\nReplied-to Message (${triggerMsg.reply_to_name}): ${triggerMsg.reply_to_text}`
-        : '';
-      const fullPrompt = `Recent Community Chat Context:\n${recentChat}${replyContext}\n\nLatest Tagged Request:\n${latestPrompt}`;
+      if (!activeKey) {
+        replyText = `@${triggerMsg.student_name} भाई, अभी इस डिवाइस पर Gemini API Key सेव नहीं है। Settings (⚙️) में API Key सेव करते ही मैं आपके हर सवाल और फ़ोटो का पूरा NCERT हल तुरंत दूंगा!`;
+      } else {
+        const recentChat = historySnapshot
+          .slice(-20)
+          .map((m) => {
+            const replyNote = m.reply_to_name
+              ? ` (replying to ${m.reply_to_name}: "${m.reply_to_text}")`
+              : '';
+            const imgNote = m.image_data ? ' [Attached Image]' : '';
+            return `[${m.subject || 'General'}] ${m.is_ai ? 'DINU AI' : m.student_name}${replyNote}${imgNote}: ${m.message}`;
+          })
+          .join('\n');
 
-      const userParts: any[] = [{ text: fullPrompt }];
+        const model = settings.modelId || 'gemini-2.5-flash';
+        const systemInstruction =
+          'You are DINU AI (@dinu), the senior NEET UG 2027 Topper & AI Mentor inside Dinu Saran NEET 2027 Student Community Chat. ' +
+          'A student tagged @dinu. Give a clear, complete, step-by-step NCERT-accurate answer in pure Hindi medium (with English scientific terms in brackets). Be encouraging and precise.';
 
-      const visionImage =
-        triggerMsg.image_data ||
-        (triggerMsg.reply_to_id
-          ? historySnapshot.find((m) => m.id === triggerMsg.reply_to_id)?.image_data
-          : null);
+        const replyContext = triggerMsg.reply_to_name
+          ? `\nReplied-to Message (${triggerMsg.reply_to_name}): ${triggerMsg.reply_to_text}`
+          : '';
+        const fullPrompt = `Recent Community Chat Context:\n${recentChat}${replyContext}\n\nLatest Tagged Request:\n${latestPrompt}`;
 
-      if (visionImage && visionImage.startsWith('data:image/')) {
-        const [meta, base64Data] = visionImage.split(',');
-        const mimeType = meta.replace('data:', '').replace(';base64', '') || 'image/jpeg';
-        if (base64Data) {
-          userParts.push({
-            inlineData: {
-              mimeType,
-              data: base64Data,
+        const userParts: any[] = [{ text: fullPrompt }];
+        const visionImage =
+          triggerMsg.image_data ||
+          (triggerMsg.reply_to_id
+            ? historySnapshot.find((m) => m.id === triggerMsg.reply_to_id)?.image_data
+            : null);
+
+        if (visionImage && visionImage.startsWith('data:image/')) {
+          const [meta, base64Data] = visionImage.split(',');
+          const mimeType =
+            meta.replace('data:', '').replace(';base64', '') || 'image/jpeg';
+          if (base64Data) {
+            userParts.push({
+              inlineData: { mimeType, data: base64Data },
+            });
+          }
+        }
+
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(
+            activeKey
+          )}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              systemInstruction: { parts: [{ text: systemInstruction }] },
+              contents: [{ role: 'user', parts: userParts }],
+              generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
+            }),
+          }
+        );
+
+        const data = await res.json();
+        replyText =
+          data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
+          `@${triggerMsg.student_name} आपका प्रश्न मिल गया है, कृपया थोड़ा और स्पष्ट लिखें ताकि मैं सटीक NCERT हल बता सकूँ।`;
+      }
+
+      const localFallbackAiMsg: CommunityMessage = {
+        id: `dinu-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        student_id: 'dinu-ai-bot',
+        student_name: 'DINU AI',
+        batch_name: 'AI Mentor',
+        subject: triggerMsg.subject || 'General',
+        reply_to_id: triggerMsg.id,
+        reply_to_name: triggerMsg.student_name,
+        reply_to_text: (triggerMsg.message || 'Photo Doubt').slice(0, 90),
+        is_admin_msg: true,
+        is_ai: true,
+        message: replyText,
+        created_at: new Date().toISOString(),
+      };
+
+      let savedAiMsg: CommunityMessage = localFallbackAiMsg;
+
+      if (supabase) {
+        const { data: aiInserted, error: insErr } = await supabase
+          .from('community_messages')
+          .insert([
+            {
+              student_id: 'dinu-ai-bot',
+              student_name: 'DINU AI',
+              batch_name: 'AI Mentor',
+              subject: triggerMsg.subject || 'General',
+              reply_to_id: triggerMsg.id,
+              reply_to_name: triggerMsg.student_name,
+              reply_to_text: (triggerMsg.message || 'Photo Doubt').slice(0, 90),
+              is_admin_msg: true,
+              is_ai: true,
+              message: replyText,
             },
-          });
+          ])
+          .select()
+          .single();
+
+        if (!insErr && aiInserted) {
+          savedAiMsg = aiInserted as CommunityMessage;
+        } else {
+          const { data: minInserted } = await supabase
+            .from('community_messages')
+            .insert([
+              {
+                student_id: 'dinu-ai-bot',
+                student_name: 'DINU AI',
+                is_ai: true,
+                message: replyText,
+              },
+            ])
+            .select()
+            .single();
+          if (minInserted) {
+            savedAiMsg = minInserted as CommunityMessage;
+          }
         }
       }
 
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(activeKey)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            contents: [{ role: 'user', parts: userParts }],
-            generationConfig: {
-              temperature: 0.4,
-              maxOutputTokens: 4096,
-            },
-          }),
-        }
+      await upsertLocalMessages([savedAiMsg]);
+      setMessages((prev) =>
+        prev.some((m) => m.id === savedAiMsg.id)
+          ? prev
+          : mergeMessageLists(prev, [savedAiMsg])
       );
 
-      const data = await res.json();
-      const replyText =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() ||
-        'माफ़ करें, अभी जवाब जनरेट नहीं हो पाया। कृपया @dinu के साथ दोबारा पूछें।';
-
-      const { data: aiInserted } = await supabase
-        .from('community_messages')
-        .insert([
-          {
-            student_id: 'dinu-ai-bot',
-            student_name: 'DINU AI',
-            batch_name: 'AI Mentor',
-            subject: triggerMsg.subject || 'General',
-            reply_to_id: triggerMsg.id,
-            reply_to_name: triggerMsg.student_name,
-            reply_to_text: (triggerMsg.message || 'Photo Doubt').slice(0, 90),
-            is_admin_msg: true,
-            is_ai: true,
-            message: replyText,
-          },
-        ])
-        .select()
-        .single();
-
-      if (aiInserted) {
-        const aiMsg = aiInserted as CommunityMessage;
-        await upsertLocalMessages([aiMsg]);
-
-        const wordCount = replyText.trim().split(/\s+/).length;
-        if (wordCount > AI_AUTO_DELETE_WORD_LIMIT) {
-          setTimeout(() => {
-            supabase
-              .from('community_messages')
-              .delete()
-              .eq('id', aiMsg.id)
-              .eq('is_pinned', false)
-              .then(() => {});
-          }, AI_AUTO_DELETE_DELAY_MS);
-        }
+      const wordCount = replyText.trim().split(/\s+/).length;
+      if (supabase && wordCount > AI_AUTO_DELETE_WORD_LIMIT) {
+        setTimeout(() => {
+          supabase
+            .from('community_messages')
+            .delete()
+            .eq('id', savedAiMsg.id)
+            .eq('is_pinned', false)
+            .then(() => {});
+        }, AI_AUTO_DELETE_DELAY_MS);
       }
-    } catch {
-      // Silent fail
+    } catch (err) {
+      console.error('DINU AI reply error:', err);
+      const errReply: CommunityMessage = {
+        id: `dinu-ai-err-${Date.now()}`,
+        student_id: 'dinu-ai-bot',
+        student_name: 'DINU AI',
+        batch_name: 'AI Mentor',
+        subject: triggerMsg.subject || 'General',
+        is_admin_msg: true,
+        is_ai: true,
+        message: `@${triggerMsg.student_name} नेटवर्क या API व्यस्त होने के कारण उत्तर रुक गया, कृपया एक बार फिर @dinu के साथ पूछें!`,
+        created_at: new Date().toISOString(),
+      };
+      await upsertLocalMessages([errReply]);
+      setMessages((prev) => mergeMessageLists(prev, [errReply]));
     } finally {
       setAiThinking(false);
     }
   };
+
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
